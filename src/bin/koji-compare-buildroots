@@ -1,0 +1,65 @@
+#!/usr/bin/python
+
+import optparse
+import sys
+import koji
+
+# Compare the contents of the buildroots of two builds, and print out
+# their differences in a (relatively) readable format.
+#
+# Mike Bonnet <mikeb@redhat.com>, 2015-01-23
+
+
+def get_br_rpms(session, task_id):
+    brs = session.listBuildroots(taskID=task_id, queryOpts={'order': '-id', 'limit': 1})
+    if not brs:
+        print 'task %s has no buildroots' % task_id
+        sys.exit(1)
+    br = brs[0]
+    rpms = session.listRPMs(componentBuildrootID=br['id'])
+    return rpms
+
+parser = optparse.OptionParser(usage='%prog task_id1 task_id2')
+parser.add_option('-r', '--profile', default='koji', help='pick a profile')
+opts, args = parser.parse_args()
+
+if len(args) != 2:
+    parser.error('You must specify two task IDs to compare')
+
+confopts = koji.read_config(opts.profile)
+session = koji.ClientSession(confopts['server'])
+
+task1 = session.getTaskInfo(int(args[0]))
+task2 = session.getTaskInfo(int(args[1]))
+
+if task1['arch'] != task2['arch']:
+    print "It doesn't make sense to compare buildroots for tasks with different arches"
+    sys.exit(1)
+
+if task1['method'] != task2['method']:
+    print "It doesn't make sense to compare buildroots from two different task types"
+    sys.exit(1)
+
+rpmlist1 = get_br_rpms(session, task1['id'])
+rpmlist2 = get_br_rpms(session, task2['id'])
+
+rpms1 = dict([(r['name'], r) for r in rpmlist1])
+rpms2 = dict([(r['name'], r) for r in rpmlist2])
+
+pkgs1 = set(rpms1.keys())
+pkgs2 = set(rpms2.keys())
+
+print 'Version changes:'
+for name in sorted(pkgs1 & pkgs2):
+    nvr1 = rpms1[name]['nvr']
+    nvr2 = rpms2[name]['nvr']
+    if nvr1 != nvr2:
+        print ' ', nvr1, '->', nvr2
+
+print 'Packages only in buildroot for %s:' % task1['id']
+for name in sorted(pkgs1 - pkgs2):
+    print ' ', rpms1[name]['nvr']
+
+print 'Packages only in buildroot for %s:' % task2['id']
+for name in sorted(pkgs2 - pkgs1):
+    print ' ', rpms2[name]['nvr']

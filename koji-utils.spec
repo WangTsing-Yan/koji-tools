@@ -38,4 +38,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %changelog
 * Thu Aug 25 2016 Jay Greguske <jgregusk@redhat.com> 1.0-1
+- new package built with tito
+
+* Thu Aug 25 2016 Jay Greguske <jgregusk@redhat.com> 1.0-1
  Initial Commit

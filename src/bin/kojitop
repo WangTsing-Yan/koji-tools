@@ -1,0 +1,169 @@
+#!/usr/bin/env python
+
+import koji
+import xml.dom.minidom
+from optparse import OptionParser
+import os
+import pprint
+import time
+
+
+def count_uniq(seq):
+    res = {}
+    for x in seq:
+        if x not in res:
+            res[x] = 0
+        res[x] += 1
+    return res
+
+
+def value(v):
+    if "string" in v:
+        v = '"%s"' % (v["string"][0],)
+    elif "boolean" in v:
+        v = v["boolean"][0]
+        if v.lower() in ["", "0", "false", "no"]:
+            v = "False"
+        elif v.lower() in ["1", "true", "yes"]:
+            v = "True"
+    elif "int" in v:
+        v = "%d" % (int(v["int"][0]))
+    elif "double" in v:
+        v = "%f" % (float(v["double"][0]))
+    elif "nil" in v:
+        v = "nil"
+    elif "array" in v:
+        v = "array[...]"
+    elif "struct" in v:
+        assert len(v["struct"]) == 1
+        s = []
+        for m in v["struct"][0].get("member", []):
+            s.append((m["name"][0], value(m["value"][0])))
+        v = "{%s}" % (", ".join("%s=%s" % (n, v) for n, v in s),)
+    else:
+        raise Exception("gargh %s" % (pprint.pformat(v)))
+    return v
+
+
+def params(d):
+    res = []
+    for p in d["methodCall"]["params"][0]["param"]:
+        v = value(p["value"][0])
+        if "name" in p:
+            v = "%s=%s" % (p["name"], v)
+        res.append(v)
+    return res
+
+
+def xmltodict(xmlstring):
+    doc = xml.dom.minidom.parseString(xmlstring)
+    d = ettodict(doc.documentElement)
+    if d.keys() == ["methodCall"]:
+        return "%s(%s)" % (d["methodCall"]["methodName"][0],
+                           ", ".join(params(d)))
+    else:
+        return d
+
+
+def ettodict(et):
+    return {et.tagName: elementtodict(et)}
+
+
+def elementtodict(el):
+    if el.nodeType == xml.dom.minidom.Node.TEXT_NODE:
+        if el.nodeValue.strip() == "":
+            return None
+        return el.nodeValue
+    res = {}
+    child = el.firstChild
+    while child is not None:
+        cv = elementtodict(child)
+        if cv is not None:
+            if (child.nodeType == xml.dom.minidom.Node.ELEMENT_NODE):
+                tn = child.tagName
+                if tn not in res:
+                    res[tn] = []
+                res[tn].append(cv)
+            elif hasattr(child, "tagName"):
+                res.setdefault("XX-"+child.tagName, []).append(cv)
+            else:
+                res.setdefault(None, []).append(cv)
+        child = child.nextSibling
+    if res.keys() == [None]:
+        res = res[None]
+        if len(res) == 1:
+            res = res[0]
+    return res
+
+
+def pretty(req):
+    return xmltodict(req)
+
+
+os.environ["TZ"] = "America/New_York"
+time.tzset()
+def howlong(timestr):
+    if type(timestr) != str:
+        return "-"
+    t = time.strptime(timestr.rsplit(".",1)[0], "%Y-%m-%d %H:%M:%S")
+    secs = time.time() - time.mktime(t)
+    if secs < 60:
+        return "%2ds" % (secs)
+    elif secs < 3600:
+        return "%2dm%02ds" % (secs // 60, secs % 60)
+    elif secs < 100*3600:
+        return "%2dh%02dm" % (secs // 3600, (secs // 60) % 60)
+    else:
+        return "%dh" % (secs // 3600)
+
+parser = OptionParser(usage="%prog tag <tag...>")
+parser.add_option('-c', '--channel', default='default', help='limit to a channel')
+parser.add_option('-r', '--profile', default='koji', help='set the koji profile')
+options, args = parser.parse_args()
+confopts = koji.read_config(options.profile)
+session = koji.ClientSession(confopts['server'])
+channel = session.getChannel(options.channel)["id"]
+states = [koji.TASK_STATES["OPEN"], koji.TASK_STATES["ASSIGNED"], koji.TASK_STATES["FREE"]]
+tasks = session.listTasks(opts={"state": states}) # , "channel_id": channel})
+
+taskbyhost = {}
+for t in tasks:
+    h = t["host_id"]
+    taskbyhost.setdefault(h, [])
+    taskbyhost[h].append(t)
+
+hostbyname = {}
+hostinfo = {}
+null_host = {"name": "unassigned", "task_load": 0, "capacity": 0, "ready": 0}
+for h in taskbyhost:
+    if h is None:
+        hi = null_host
+    else:
+        hi = session.getHost(h)
+    hostbyname[hi["name"]] = h
+    hostinfo[hi["name"]] = hi
+
+for hn in sorted(hostbyname):
+    hi = hostinfo[hn]
+    load = sum(float(t["weight"]) for t in taskbyhost[hostbyname[hn]])
+    print "%s  %.1f total %.1f/%.1f %s" % (hn, load, float(hi["task_load"]), float(hi["capacity"]), "R" if hi["ready"] else "-")
+    for t in sorted(taskbyhost[hostbyname[hn]], key=lambda x: -float(x["weight"])):
+        print "  %s %8d %.1f %6s %7s %s" % (
+            koji.TASK_STATES[t["state"]][:2],
+            int(t["id"]),
+            float(t["weight"]),
+            howlong(t["start_time"]),
+            t["arch"],
+            pretty(t["request"]))
+    print ""
+
+states = [koji.TASK_STATES["FREE"]]
+tasks = session.listTasks(opts={"state": states, "channel_id": channel})
+
+tasks_by_arch = count_uniq((t["method"], t["arch"]) for t in tasks)
+print "Tasks available:"
+if tasks_by_arch == []:
+    print "    (none)"
+else:
+    for m, a in sorted(tasks_by_arch):
+        print "    %3d %7s %s" % (tasks_by_arch[m, a], a, m)

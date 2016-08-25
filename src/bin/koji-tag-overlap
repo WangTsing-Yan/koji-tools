@@ -1,0 +1,53 @@
+#!/usr/bin/python
+
+"""
+Prints a summary of package overlaps for a set of tags
+"""
+
+from optparse import OptionParser
+import koji
+import sys
+
+parser = OptionParser(usage="%prog tag <tag...>")
+parser.add_option('-r', '--profile', default='koji', help='set the koji profile')
+options, args = parser.parse_args()
+opts = koji.read_config(options.profile)
+session = koji.ClientSession(opts['server'])
+
+tags = []
+for tag in args:
+    tinfo = session.getTag(tag)
+    if not tinfo:
+        print "No such tag: %s" % tag
+        sys.exit(1)
+    tags.append(tinfo)
+
+index = {}
+for tinfo in tags:
+    tagname = tinfo['name']
+    builds = session.listTagged(tinfo['id'], inherit=True, latest=True)
+    for binfo in builds:
+        index.setdefault(binfo['name'], {})[tagname] = binfo
+
+packages = index.keys()
+packages.sort()
+for package in packages:
+    ptags = index[package]
+    if len(ptags) <= 1:
+        continue
+    ver_idx = {}
+    for tagname in ptags:
+        binfo = ptags[tagname]
+        key = (binfo['version'], binfo['release'])
+        ver_idx.setdefault(key, []).append(tagname)
+    vers = ver_idx.keys()
+    vers.sort()
+    if len(vers) == 1:
+        v, r = vers[0]
+        taglist = ", ".join(ver_idx[v, r])
+        print "%s: %s-%s: %s" % (package, v, r, taglist)
+    else:
+        print "%s: multiple versions" % package
+        for v, r in vers:
+            taglist = ", ".join(ver_idx[v, r])
+            print "    %s-%s: %s" % (v, r, taglist)

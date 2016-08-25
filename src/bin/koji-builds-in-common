@@ -1,0 +1,73 @@
+#!/usr/bin/python -tt
+
+import koji
+from optparse import OptionParser
+
+
+def get_opts():
+    """process command line arguments"""
+    usage = """
+Compare builds between multiple tags. Report builds and pkgs in common.
+
+%prog [options] tag1 tag2 [tag3...]"""
+    parser = OptionParser(usage=usage)
+    parser.add_option('-i', '--inherit', action='store_true', default=False,
+        help='Consider tag inheritance')
+    parser.add_option('-t', '--terse', action='store_true', default=False,
+        help='Just print the important stuff, no headers')
+    parser.add_option('-r', '--profile', default='koji',
+        help='Specify a config file section')
+    options, args = parser.parse_args()
+    if len(args) < 2:
+        parser.error('You must specify at least 2 Brew tags')
+    return args, options
+
+
+def compare_tags(tags, inherit=False, terse=False, latest=True, profile='koji'):
+    """
+    Compare builds between 2 or more tags.
+    Print out builds and packages in common.
+    """
+    opts = koji.read_config(profile)
+    c = koji.ClientSession(opts['server'])
+
+    def get_pkgs(builds):
+        return set([b['package_name'] for b in builds])
+
+    def get_blds(builds):
+        return set([b['nvr'] for b in builds])
+
+    def printt(msg):
+        if not terse:
+            print msg
+
+    answers = {}
+    answers[tags[0]] = c.listTagged(tags[0], inherit=inherit, latest=latest)
+    pcommon = get_pkgs(answers[tags[0]])
+    bcommon = get_blds(answers[tags[0]])
+    for t in tags[1:]:
+        answers[t] = c.listTagged(t, inherit=inherit, latest=latest)
+        pcommon.intersection_update(get_pkgs(answers[t]))
+        bcommon.intersection_update(get_blds(answers[t]))
+
+    printt('Tags considered: %s' % ', '.join(tags))
+    printt('Builds in common:')
+    for b in bcommon:
+        print b
+    print
+    printt('Packages in common:')
+    for p in pcommon:
+        printh = True
+        for t in tags:
+            nvr = [b['nvr'] for b in answers[t] if b['package_name'] == p][0]
+            if nvr in bcommon:
+                break
+            if printh:
+                print p
+                printh = False
+            printt('  (%s has %s)' % (t, nvr))
+    return
+
+if __name__ == '__main__':
+    tags, opts = get_opts()
+    compare_tags(tags, terse=opts.terse, inherit=opts.inherit, profile=opts.profile)

@@ -1,0 +1,110 @@
+#!/usr/bin/python -tt
+# -*- coding: utf-8 -*-
+
+
+import sys
+from optparse import OptionParser
+
+import koji
+
+
+class CompareTags(object):
+    def __init__(self, profile, quiet=False):
+        opts = koji.read_config(profile)
+        self.koji_proxy = koji.ClientSession(opts['server'])
+        self.quiet = quiet
+
+    def get_nvrs(self, builds):
+        return set([i["nvr"] for i in builds])
+
+    def get_packages(self, builds):
+        return set([i["package_name"] for i in builds])
+
+    def compare_tags(self, tags, inherit=False, latest=True, packages=False, just_diff=False):
+        """
+        Compare builds between 2 or more tags.
+        Print out builds and packages in common.
+        """
+
+        if not self.quiet:
+            print "Diff between tags: %s and %s" % (tags[0], tags[1])
+
+        builds_by_tag = {}
+        for tag in tags:
+            builds_by_tag[tag] = self.koji_proxy.listTagged(tag, inherit=inherit, latest=latest)
+
+        if packages:
+            tag1_pkgs = self.get_packages(builds_by_tag[tags[0]])
+            tag2_pkgs = self.get_packages(builds_by_tag[tags[1]])
+        else:
+            tag1_pkgs = self.get_nvrs(builds_by_tag[tags[0]])
+            tag2_pkgs = self.get_nvrs(builds_by_tag[tags[1]])
+
+        removed = tag1_pkgs - tag2_pkgs
+        added = tag2_pkgs - tag1_pkgs
+        for i in sorted(tag1_pkgs | tag2_pkgs):
+            if i in added:
+                prefix = "+"
+            elif i in removed:
+                prefix = "-"
+            else:
+                prefix = " "
+
+            if not (just_diff and prefix == " "):
+                print "%s %s" % (prefix, i)
+
+
+def main(argv):
+    """process command line arguments"""
+    usage = """
+Diff builds between 2 tags.
+
+%prog [options] tag1 tag2"""
+
+    parser = OptionParser(usage=usage)
+    parser.add_option(
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=False,
+        help="Just print the important stuff, no headers",
+    )
+    parser.add_option(
+        "-i",
+        "--inherit",
+        action="store_true",
+        default=False,
+        help="Consider tag inheritance",
+    )
+    parser.add_option(
+        "-p",
+        "--packages",
+        action="store_true",
+        default=False,
+        help="Diff packages, not builds (NVRs)",
+    )
+    parser.add_option(
+        "-r",
+        "--profile",
+        default='koji',
+        help="Specify a profile (config section name)",
+    )
+    parser.add_option(
+        "-d",
+        "--just-diff",
+        action="store_true",
+        default=False,
+        help="Print only differences, skip builds in common",
+    )
+
+    opts, args = parser.parse_args(argv)
+
+    if len(args) != 2:
+        parser.error("You must specify 2 koji tags")
+
+    compare = CompareTags(opts.profile, quiet=opts.quiet)
+    compare.compare_tags(args, inherit=opts.inherit, packages=opts.packages, just_diff=opts.just_diff)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

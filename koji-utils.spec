@@ -1,5 +1,5 @@
 Name:       koji-tools
-Version:    1.1
+Version:    1.2
 Release:    1%{?dist}
 Summary:    A collection of libraries and tools for interacting with Koji.
 Group:      Applications/System
@@ -37,6 +37,9 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Thu Aug 25 2016 Mike McLean <mikem@redhat.com> 1.2-1
+- rename to koji-tools
+
 * Thu Aug 25 2016 Jay Greguske <jgregusk@redhat.com> 1.1-1
 - add koji-compare-buildroots (jgregusk@redhat.com)
 

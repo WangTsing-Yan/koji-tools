@@ -1,10 +1,10 @@
-Name:       koji-utils
+Name:       koji-tools
 Version:    1.1
 Release:    1%{?dist}
 Summary:    A collection of libraries and tools for interacting with Koji.
 Group:      Applications/System
 License:    LGPLv2 GPLv2+
-URL:        https://pagure.io/releases/forks/jgreguske/koji-utils
+URL:        https://pagure.io/koji-utils
 Source0:    %{name}-%{version}.tar.gz
 BuildRoot:  %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 BuildArch:  noarch

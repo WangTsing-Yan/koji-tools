@@ -19,7 +19,7 @@ Compare builds between multiple tags. Report builds and pkgs in common.
         help='Specify a config file section')
     options, args = parser.parse_args()
     if len(args) < 2:
-        parser.error('You must specify at least 2 Brew tags')
+        parser.error('You must specify at least 2 tags')
     return args, options
 
 

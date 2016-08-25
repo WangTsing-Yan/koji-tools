@@ -1,5 +1,5 @@
 Name:       koji-utils
-Version:    1.0
+Version:    1.1
 Release:    1%{?dist}
 Summary:    A collection of libraries and tools for interacting with Koji.
 Group:      Applications/System
@@ -37,6 +37,9 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Thu Aug 25 2016 Jay Greguske <jgregusk@redhat.com> 1.1-1
+- add koji-compare-buildroots (jgregusk@redhat.com)
+
 * Thu Aug 25 2016 Jay Greguske <jgregusk@redhat.com> 1.0-1
 - new package built with tito
 

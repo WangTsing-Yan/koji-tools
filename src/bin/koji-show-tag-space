@@ -1,0 +1,81 @@
+#!/usr/bin/python
+
+import koji
+import optparse
+import os
+import stat
+import traceback
+
+
+def size_scan(path, idx):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        traceback.print_exc()
+        return
+    if stat.S_ISREG(st.st_mode):
+        idx.setdefault(st.st_ino, st.st_size)
+    elif stat.S_ISDIR(st.st_mode):
+        for fn in os.listdir(path):
+            size_scan("%s/%s" % (path, fn), idx)
+    # XXX - ignoring non-regular files for now
+
+
+def du(path):
+    idx = {}
+    size_scan(path, idx)
+    sum = 0
+    for size in idx.itervalues():
+        sum += size
+    return sum
+
+
+iec_units = [
+    [1024, 'KiB'],
+    [1L << 20, 'MiB'],
+    [1L << 30, 'GiB'],
+    [1L << 40, 'TiB'],
+    [1L << 50, 'PiB'],
+]
+
+
+def pretty_size(n):
+    """Given n (bytes) returns a pretty size string"""
+    last = 1, 'B'
+    for N, unit in iec_units:
+        if n < N:
+            break
+        last = (N, unit)
+    N, unit = last
+    return "%.2f %s" % (float(n)/N, unit)
+
+# accepts a list of tags on command line
+parser = optparse.OptionParser(usage='%prog task_id1 task_id2')
+parser.add_option('-r', '--profile', default='koji', help='pick a profile')
+opts, args = parser.parse_args()
+fopts = koji.read_config(opts.profile)
+session = koji.ClientSession(fopts['server'])
+
+tags = [session.getTag(arg, strict=True) for arg in args]
+builds = {}
+for tag in tags:
+    tagbuilds = session.listTagged(tag['id'])
+    print "%s: %i builds" % (tag['name'], len(tagbuilds))
+    for build in tagbuilds:
+        builds.setdefault(build['id'], build)
+total = 0
+elsewhere = 0
+tag_idx = dict([(t['id'], t) for t in tags])
+print "Got %i total builds" % len(builds)
+for build in builds.itervalues():
+    path = koji.pathinfo.build(build)
+    size = du(path)
+    total += size
+    # check to see if tagged elswhere
+    for tag in session.listTags(build=build['id']):
+        if not tag_idx.has_key(tag['id']):
+            elsewhere += size
+            break
+print "Total: %s" % pretty_size(total)
+print "Tagged elsewhere: %s" % pretty_size(elsewhere)
+print "Unique: %s" % pretty_size(total - elsewhere)

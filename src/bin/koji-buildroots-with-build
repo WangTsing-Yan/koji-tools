@@ -1,0 +1,35 @@
+#!/usr/bin/python
+
+import koji
+import sys
+from optparse import OptionParser
+
+
+def main():
+    global options
+    parser = OptionParser("usage: %prog [options] <nvr|nvra>")
+    parser.add_option('-r', '--profile', default='koji',
+                      help='set the koji profile')
+    (options, args) = parser.parse_args()
+    if len(args) != 1:
+        parser.error()
+    fopts = koji.read_config(options.profile)
+    session = koji.ClientSession(fopts['server'])
+    rpminfo = session.getRPM(args[0])
+    if rpminfo:
+        rpms = [rpminfo]
+    else:
+        buildinfo = session.getBuild(args[0])
+        if not buildinfo:
+            print "Could not find", args[0]
+            sys.exit(1)
+        rpms = session.listRPMs(buildID=buildinfo['id'])
+    brs = {}
+    for rpm in rpms:
+        for br in session.listBuildroots(rpmID=rpm['id']):
+            brs[br['id']] = br
+    for br_id, br in sorted(brs.items()):
+        print "%(id)s: %(arch)s %(tag_name)s" % br
+
+if __name__ == "__main__":
+    main()

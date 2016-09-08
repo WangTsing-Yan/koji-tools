@@ -1,0 +1,136 @@
+#!/usr/bin/env python
+
+import koji
+import sys
+from optparse import OptionParser
+
+
+def main(args):
+    global client
+    parser = OptionParser()
+    parser.add_option("--tagged", default=False, action="store_true")
+    parser.add_option("--has-tag", default=[], action="append")
+    parser.add_option("--print-tags", default=True, dest="print_tags", action="store_true")
+    parser.add_option("--no-print-tags", dest="print_tags", action="store_false")
+    parser.add_option("--latest", default=False, action="store_true")
+    parser.add_option('-r', '--profile', default='koji',
+                      help='set the koji profile (section name)')
+    (options, args) = parser.parse_args()
+    if options.has_tag != [] or options.latest:
+        options.tagged = True
+    list_built_with(options, args)
+
+
+def get_latest_builds(client, tag):
+    l = client.listTagged(tag, latest=True, inherit=True)
+    return sorted(p["nvr"] for p in l)
+
+
+def list_built_with(options, nvrs):
+    opts = koji.read_config(options.profile)
+    client = koji.ClientSession(opts['server'])
+    if type(nvrs) == str:
+        nvrs = [nvrs]
+
+    name = ", ".join(nvrs)
+    print "%s" % (name)
+    print "="*len(name)
+
+    rpms = []
+    for nvr in nvrs:
+        nvr_build = client.getBuild(nvr)
+        rpms.extend(client.listRPMs(buildID=nvr_build["id"]))
+    # print "Got %d rpms to look at" % (len(rpms))
+
+    tasks = set()
+    client.multicall = True
+    for rpm in rpms:
+        client.listBuildroots(rpmID=rpm["id"])
+    for rpm, rpmbrs in zip(rpms, client.multiCall()):
+        for br in rpmbrs[0]:
+            tasks.add(br["task_id"])
+        # print "Got %d/%d tasks using buildroots for %s %s" % (len(rpmbrs[0]), len(tasks), rpm["nvr"], rpm["arch"])
+
+    seen_tasks = []
+    skip_tasks = set()
+    while tasks:
+        tasks = list(tasks)
+        n_tasks = set(tasks[1000:])
+        tasks = tasks[:1000]
+
+        client.multicall = True
+        for task in tasks:
+            task = int(task)
+            if task in seen_tasks:
+                continue
+
+            seen_tasks.append(task)
+            client.getTaskInfo(task)
+
+        for task, ti in zip(tasks, client.multiCall()):
+            ti = ti[0]
+            if ti.get("method") == "buildArch":
+                skip_tasks.add(task)
+            if "parent" in ti and ti["parent"] is not None:
+                p = ti["parent"]
+                if int(p) not in seen_tasks:
+                    n_tasks.add(ti["parent"])
+        tasks = n_tasks
+        # print "Got %d tasks (%d to go)..." % (len(seen_tasks)-len(skip_tasks), len(tasks))
+
+    seen_tasks = sorted(s for s in seen_tasks if s not in skip_tasks)
+
+    build_nvrs = {}
+    build_tags = {}
+    while seen_tasks:
+        this_lot = seen_tasks[:2500]
+        seen_tasks = seen_tasks[2500:]
+
+        these_builds = []
+
+        client.multicall = True
+        for task in this_lot:
+            client.listBuilds(taskID=task)
+
+        for builds in client.multiCall():
+            builds = builds[0]
+            for build in builds:
+                bid = build["build_id"]
+                build_nvrs[build["nvr"]] = bid
+                these_builds.append(bid)
+
+        client.multicall = True
+        for build in these_builds:
+            client.listTags(build)
+        for build, tags in zip(these_builds, client.multiCall()):
+            build_tags[build] = [t["name"] for t in tags[0]]
+
+        # print "Got %d builds..." % (len(build_nvrs))
+
+    client.multicall = False
+
+    if options.latest:
+        latest_builds = {}
+        for tag in options.has_tag:
+            latest_builds[tag] = get_latest_builds(client, tag)
+        if not options.has_tag:
+            for build in build_tags:
+                for tag in build_tags[build]:
+                    if tag not in latest_builds:
+                        latest_builds[tag] = get_latest_builds(client, tag)
+
+    for bnvr in sorted(build_nvrs):
+        bid = build_nvrs[bnvr]
+        tags = ""
+        t = build_tags[bid]
+        if options.latest:
+            t = [tag for tag in t if bnvr in latest_builds.get(tag, [])]
+        if options.has_tag:
+            t = [tag for tag in t if tag in options.has_tag]
+        if options.print_tags and t:
+            tags = " [%s]" % (",".join(sorted(t)))
+        if t or not options.tagged:
+            print "%s%s" % (bnvr, tags)
+
+if __name__ == "__main__":
+    main(sys.argv)

@@ -1,6 +1,6 @@
 Name:       koji-tools
 Version:    1.3
-Release:    1%{?dist}
+Release:    2%{?dist}
 Summary:    A collection of libraries and tools for interacting with Koji.
 Group:      Applications/System
 License:    LGPLv2 GPLv2+

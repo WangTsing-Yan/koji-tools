@@ -37,6 +37,10 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Mon Sep 26 2016 Jay Greguske <jgregusk@redhat.com> 1.3-2
+- enable rhel 5 builds (jgregusk@redhat.com)
+- remove a brew reference (jgregusk@redhat.com)
+
 * Thu Sep 08 2016 Jay Greguske <jgregusk@redhat.com> 1.3-1
 - half a dozen more tools made generic (jgregusk@redhat.com)
 

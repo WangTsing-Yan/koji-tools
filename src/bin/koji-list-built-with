@@ -5,8 +5,7 @@ import sys
 from optparse import OptionParser
 
 
-def main(args):
-    global client
+def get_options():
     parser = OptionParser()
     parser.add_option("--tagged", default=False, action="store_true")
     parser.add_option("--has-tag", default=[], action="append")
@@ -18,7 +17,7 @@ def main(args):
     (options, args) = parser.parse_args()
     if options.has_tag != [] or options.latest:
         options.tagged = True
-    list_built_with(options, args)
+    return (options, args)
 
 
 def get_latest_builds(client, tag):
@@ -27,8 +26,8 @@ def get_latest_builds(client, tag):
 
 
 def list_built_with(options, nvrs):
-    opts = koji.read_config(options.profile)
-    client = koji.ClientSession(opts['server'])
+    session_opts = koji.grab_session_options(koji.config)
+    client = koji.ClientSession(koji.config.server, session_opts)
     if type(nvrs) == str:
         nvrs = [nvrs]
 
@@ -133,4 +132,6 @@ def list_built_with(options, nvrs):
             print "%s%s" % (bnvr, tags)
 
 if __name__ == "__main__":
-    main(sys.argv)
+    options, args = get_options()
+    koji = koji.get_profile_module(options.profile)
+    list_built_with(options, args)

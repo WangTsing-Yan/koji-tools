@@ -39,11 +39,11 @@ def getRPMChangeLogs(hdr, max=-1, timeformat="%a %b %d %Y"):
 
 
 def get_info(opts, builds, rpmfield):
-    fopts = koji.read_config(opts.profile)
-    session = koji.ClientSession(fopts['server'])
+    session_opts = koji.grab_session_options(koji.config)
+    session = koji.ClientSession(koji.config.server, session_opts)
     pinfo = koji.pathinfo
     for b in builds:
-        bld = session.getBuild(b)
+        bld = session.getBuild(b, strict=True)
         rpms = session.listRPMs(bld['id'], arches='src')
         if len(rpms) == 0:
             # no RPMs in this build, skip it

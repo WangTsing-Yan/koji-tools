@@ -12,9 +12,9 @@ def main():
                       help='set the koji profile')
     (options, args) = parser.parse_args()
     if len(args) != 1:
-        parser.error()
-    fopts = koji.read_config(options.profile)
-    session = koji.ClientSession(fopts['server'])
+        parser.error('Please specify a build or rpm')
+    session_opts = koji.grab_session_options(koji.config)
+    session = koji.ClientSession(koji.config.server, session_opts)
     rpminfo = session.getRPM(args[0])
     if rpminfo:
         rpms = [rpminfo]

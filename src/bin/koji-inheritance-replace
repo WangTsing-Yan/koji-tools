@@ -1,0 +1,38 @@
+#!/usr/bin/python
+
+import commands
+import sys
+from optparse import OptionParser
+
+
+def run(command):
+    print command
+    rv, output = commands.getstatusoutput(command)
+    assert not rv
+    return output
+
+
+def main(args):
+    '''the main method'''
+
+    parser = OptionParser("usage: %prog [options] <tag> <tag to be replaced> <replacement tag>")
+    parser.add_option('-r', '--profile', default='koji',
+                      help='set the koji profile')
+    (opts, args) = parser.parse_args(args)
+
+    if len(args) != 4:
+        parser.error("incorrect number of arguments")
+
+    output = run("%s taginfo %s" % (opts.profile, args[1]))
+    priority = None
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) == 4 and parts[2] == args[2]:
+            priority = int(parts[0])
+            break
+    assert priority is not None, output
+    run("%s remove-tag-inheritance %s %s" % (opts.profile, args[1], args[2]))
+    run("%s add-tag-inheritance --priority %s %s %s" % (opts.profile, priority, args[1], args[3]))
+
+if __name__ == "__main__":
+    main(sys.argv)

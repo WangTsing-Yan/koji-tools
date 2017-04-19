@@ -1,0 +1,66 @@
+#!/usr/bin/python
+
+import koji
+from optparse import OptionParser
+import os.path
+
+
+def get_opts():
+    usage = """
+Specify a build and an RPM field and this script will print out that field
+from the SRPM for that build. Useful for comparing changelogs or
+reviewing licenses. Do not include the '%{}' syntax in your command.
+
+"changelog" is a special field that this script will put together based on
+changelogname, changelogtime, and changelogtext.
+
+%prog [options] rpm-field build [build...]"""
+    parser = OptionParser(usage=usage)
+    parser.add_option('-r', '--profile', default='koji',
+                      help='set the koji profile (config section name')
+    opts, args = parser.parse_args()
+    if len(args) < 2:
+        parser.error('You must specify a tag and at least 1 build to query.')
+    return opts, args[0], args[1:]
+
+
+# stolen from rhtools/__init__.py; modified a little
+def getRPMChangeLogs(hdr, max=-1, timeformat="%a %b %d %Y"):
+    if max == 0:
+        return
+    s = []
+    names = koji.get_header_field(hdr, 'CHANGELOGNAME')
+    text = koji.get_header_field(hdr, 'CHANGELOGTEXT')
+    i = 0
+    while (i < max or max < 0) and i < len(names):
+        s.append(("%s\n%s\n" % (names[i], text[i]),))
+        i += 1
+    return s
+
+
+def get_info(opts, builds, rpmfield):
+    session_opts = koji.grab_session_options(koji.config)
+    session = koji.ClientSession(koji.config.server, session_opts)
+    pinfo = koji.pathinfo
+    for b in builds:
+        bld = session.getBuild(b, strict=True)
+        rpms = session.listRPMs(bld['id'], arches='src')
+        if len(rpms) == 0:
+            # no RPMs in this build, skip it
+            continue
+        rpmpath = os.path.join(pinfo.build(bld), pinfo.rpm(rpms[0]))
+        hdr = koji.get_rpm_header(rpmpath)
+        if rpmfield == 'changelog':
+            changelog = getRPMChangeLogs(hdr)
+            print '%s:' % bld['nvr']
+            for log in changelog:
+                for line in log:
+                    print line
+        else:
+            field = koji.get_header_field(hdr, rpmfield)
+            print '%s: %s' % (bld['nvr'], field)
+
+if __name__ == '__main__':
+    opts, rpmfield, blds = get_opts()
+    koji = koji.get_profile_module(opts.profile)
+    get_info(opts, blds, rpmfield)

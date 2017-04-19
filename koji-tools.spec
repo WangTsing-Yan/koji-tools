@@ -1,6 +1,6 @@
 Name:       koji-tools
-Version:    1.2
-Release:    1%{?dist}
+Version:    1.3
+Release:    2%{?dist}
 Summary:    A collection of libraries and tools for interacting with Koji.
 Group:      Applications/System
 License:    LGPLv2 GPLv2+
@@ -37,6 +37,13 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Mon Sep 26 2016 Jay Greguske <jgregusk@redhat.com> 1.3-2
+- enable rhel 5 builds (jgregusk@redhat.com)
+- remove a brew reference (jgregusk@redhat.com)
+
+* Thu Sep 08 2016 Jay Greguske <jgregusk@redhat.com> 1.3-1
+- half a dozen more tools made generic (jgregusk@redhat.com)
+
 * Thu Aug 25 2016 Mike McLean <mikem@redhat.com> 1.2-1
 - rename to koji-tools
 

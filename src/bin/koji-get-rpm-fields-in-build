@@ -41,7 +41,7 @@ def getRPMChangeLogs(hdr, max=-1, timeformat="%a %b %d %Y"):
 def get_info(opts, builds, rpmfield):
     fopts = koji.read_config(opts.profile)
     session = koji.ClientSession(fopts['server'])
-    pinfo = koji.PathInfo('/mnt/koji')
+    pinfo = koji.pathinfo
     for b in builds:
         bld = session.getBuild(b)
         rpms = session.listRPMs(bld['id'], arches='src')
@@ -62,4 +62,5 @@ def get_info(opts, builds, rpmfield):
 
 if __name__ == '__main__':
     opts, rpmfield, blds = get_opts()
+    koji = koji.get_profile_module(opts.profile)
     get_info(opts, blds, rpmfield)

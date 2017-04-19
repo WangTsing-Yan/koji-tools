@@ -49,7 +49,7 @@ def get_info(opts, tag, rpmfield):
     session = koji.ClientSession(fopts['server'])
     builds = session.listTagged(tag, inherit=opts.inherit, latest=opts.latest,
                                 package=opts.package)
-    pinfo = koji.PathInfo('/mnt/koji')
+    pinfo = koji.pathinfo
     for b in builds:
         rpms = session.listRPMs(b['id'], arches='src')
         if len(rpms) == 0:
@@ -69,4 +69,5 @@ def get_info(opts, tag, rpmfield):
 
 if __name__ == '__main__':
     opts, tag, rpmfield = get_opts()
+    koji = koji.get_profile_module(opts.profile)
     get_info(opts, tag, rpmfield)

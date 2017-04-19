@@ -1,6 +1,5 @@
 #!/usr/bin/python
 
-import kobo.rpmlib
 import koji
 from optparse import OptionParser
 import os.path
@@ -36,8 +35,8 @@ def getRPMChangeLogs(hdr, max=-1, timeformat="%a %b %d %Y"):
     if max == 0:
         return
     s = []
-    names = kobo.rpmlib.get_header_field(hdr, 'CHANGELOGNAME')
-    text = kobo.rpmlib.get_header_field(hdr, 'CHANGELOGTEXT')
+    names = koji.get_header_field(hdr, 'CHANGELOGNAME')
+    text = koji.get_header_field(hdr, 'CHANGELOGTEXT')
     i = 0
     while (i < max or max < 0) and i < len(names):
         s.append(("%s\n%s\n" % (names[i], text[i]),))
@@ -57,7 +56,7 @@ def get_info(opts, tag, rpmfield):
             # no RPMs in this build, skip it
             continue
         rpmpath = os.path.join(pinfo.build(b), pinfo.rpm(rpms[0]))
-        hdr = kobo.rpmlib.get_rpm_header(rpmpath)
+        hdr = koji.get_rpm_header(rpmpath)
         if rpmfield == 'changelog':
             changelog = getRPMChangeLogs(hdr)
             print '%s:' % b['nvr']
@@ -65,7 +64,7 @@ def get_info(opts, tag, rpmfield):
                 for line in log:
                     print line
         else:
-            field = kobo.rpmlib.get_header_field(hdr, rpmfield)
+            field = koji.get_header_field(hdr, rpmfield)
             print '%s: %s' % (b['nvr'], field)
 
 if __name__ == '__main__':

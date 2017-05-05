@@ -8,7 +8,8 @@ from optparse import OptionParser
 def run(command):
     print command
     rv, output = commands.getstatusoutput(command)
-    assert not rv
+    if rv:
+        raise RuntimeError("Error when running: '%s': %s" % (command, output))
     return output
 
 

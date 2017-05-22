@@ -8,7 +8,8 @@ from optparse import OptionParser
 def run(command):
     print command
     rv, output = commands.getstatusoutput(command)
-    assert not rv
+    if rv:
+        raise RuntimeError("Error when running: '%s': %s" % (command, output))
     return output
 
 
@@ -30,7 +31,9 @@ def main(args):
         if len(parts) == 4 and parts[2] == args[2]:
             priority = int(parts[0])
             break
-    assert priority is not None, output
+    if priority is None:
+        raise RuntimeError("Cannot find inheritance priority for tag '%s'. "
+                "Is the tag inherited?" % args[2])
     run("%s remove-tag-inheritance %s %s" % (opts.profile, args[1], args[2]))
     run("%s add-tag-inheritance --priority %s %s %s" % (opts.profile, priority, args[1], args[3]))
 

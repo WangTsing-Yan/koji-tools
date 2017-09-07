@@ -18,12 +18,12 @@ def main():
     session_opts = koji.grab_session_options(koji.config)
     session = koji.ClientSession(koji.config.server, session_opts)
 
+    volumes = session.listVolumes()
+
     to_delete = []
     for nvr in args:
-        builddir = check_build(nvr)
-        # returns None if we should skip it
-        if builddir:
-            to_delete.append(builddir)
+        dirs = check_build(nvr, volumes)
+        to_delete.extend(dirs)
 
     for builddir in to_delete:
         if opts.test:
@@ -33,23 +33,30 @@ def main():
             koji.util.rmtree(builddir)
 
 
-def check_build(nvr):
+def check_build(nvr, volumes):
     binfo = session.getBuild(nvr)
     if binfo:
         state = koji.BUILD_STATES[binfo['state']]
         if state not in ('FAILED', 'DELETED', 'CANCELED'):
             print("Build %s is %s. Skipping." % (nvr, state))
-            return None
-        builddir = koji.pathinfo.build(binfo)
+            return []
     else:
         # no entry, so we should delete the dir if present
-        _info = koji.parse_NVR(nvr)
-        builddir = koji.pathinfo.build(_info)
-    if os.path.exists(builddir):
-        return builddir
-    else:
-        print("No such directory: %s" % builddir)
-        return None
+        binfo = koji.parse_NVR(nvr)
+
+    # check for content on all volumes
+    dirs = []
+    for volinfo in volumes:
+        _binfo = binfo.copy()
+        _binfo['volume_id'] = volinfo['id']
+        _binfo['volume_name'] = volinfo['name']
+        builddir = koji.pathinfo.build(_binfo)
+        if os.path.exists(builddir):
+            dirs.append(builddir)
+
+    if not dirs:
+        print("No directories found for: %s" % nvr)
+    return dirs
 
 
 if __name__ == '__main__':

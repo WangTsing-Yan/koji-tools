@@ -1,0 +1,63 @@
+#!/usr/bin/python
+
+import optparse
+import os
+import koji
+
+
+def main():
+    global koji
+    global session
+    parser = optparse.OptionParser(usage='%prog [options] <nvr> [<nvr> ...]')
+    parser.add_option('-p', '--profile', default='koji', help='pick a profile')
+    parser.add_option('-n', '--test', action='store_true', default=False,
+                      help='test mode')
+    opts, args = parser.parse_args()
+
+    koji = koji.get_profile_module(opts.profile)
+    session_opts = koji.grab_session_options(koji.config)
+    session = koji.ClientSession(koji.config.server, session_opts)
+
+    volumes = session.listVolumes()
+
+    to_delete = []
+    for nvr in args:
+        dirs = check_build(nvr, volumes)
+        to_delete.extend(dirs)
+
+    for builddir in to_delete:
+        if opts.test:
+            print("Would have removed: %s" % builddir)
+        else:
+            print("Removing: %s" % builddir)
+            koji.util.rmtree(builddir)
+
+
+def check_build(nvr, volumes):
+    binfo = session.getBuild(nvr)
+    if binfo:
+        state = koji.BUILD_STATES[binfo['state']]
+        if state not in ('FAILED', 'DELETED', 'CANCELED'):
+            print("Build %s is %s. Skipping." % (nvr, state))
+            return []
+    else:
+        # no entry, so we should delete the dir if present
+        binfo = koji.parse_NVR(nvr)
+
+    # check for content on all volumes
+    dirs = []
+    for volinfo in volumes:
+        _binfo = binfo.copy()
+        _binfo['volume_id'] = volinfo['id']
+        _binfo['volume_name'] = volinfo['name']
+        builddir = koji.pathinfo.build(_binfo)
+        if os.path.exists(builddir):
+            dirs.append(builddir)
+
+    if not dirs:
+        print("No directories found for: %s" % nvr)
+    return dirs
+
+
+if __name__ == '__main__':
+    main()

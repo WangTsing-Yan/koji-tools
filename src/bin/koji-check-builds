@@ -1,0 +1,131 @@
+#!/usr/bin/python
+
+import Queue
+import logging
+import optparse
+import os
+import threading
+import time
+
+import koji as _koji  # koji declared using profile module in main()
+
+
+logger = logging.getLogger('koji.checkbuilds')
+
+# an event to indicate that the feeder thread is done
+feeder_done = threading.Event()
+
+# queue to hold actions in the pipeline
+queue = Queue.Queue()
+
+
+def main():
+    global koji
+    parser = optparse.OptionParser(usage='%prog [options] <nvr> [<nvr> ...]')
+    parser.add_option('-p', '--profile', default='BOGUS',
+                      help='pick a profile')
+    # ^ XXX fix default later
+    parser.add_option('-j', '--threads', default=5, type='int',
+                      help='worker thread count')
+    parser.add_option('-n', '--test', action='store_true', default=False,
+                      help='test mode')
+    opts, args = parser.parse_args()
+
+    koji = _koji.get_profile_module(opts.profile)
+
+    # TODO configure logging
+
+    # start our threads
+    fthread = threading.Thread(name='feeder', target=feeder_thread,
+                               args=(opts, args))
+    fthread.setDaemon(True)
+    fthread.start()
+
+    threads = []
+    for i in range(opts.threads):
+        wthread = threading.Thread(name='worker %i' % i, target=worker_thread,
+                                   args=(opts,))
+        wthread.setDaemon(True)
+        wthread.start()
+        threads.append(wthread)
+
+    # the builds thread will be the first to finish
+    fthread.join()
+    feeder_done.set()
+
+    # now we wait for the queue to be empty
+    queue.join()
+
+    print('Finished. Waiting for workers to stop.')
+    for wthread in threads:
+        wthread.join()
+
+
+def get_session():
+    '''Get a new anonymous session'''
+    session_opts = koji.grab_session_options(koji.config)
+    session_opts['anon_retry'] = True
+    return koji.ClientSession(koji.config.server, session_opts)
+
+
+def feeder_thread(opts, args):
+    '''Fetch builds and feed them into the queu'''
+    session = get_session()
+    for build in get_builds(session):
+        while queue.qsize > 1000:
+            # avoid overloading the queue
+            time.sleep(5)
+        queue.put([check_build, {'build': build}])
+
+
+def get_builds(session):
+    # TODO
+    return []
+
+
+def worker_thread(opts):
+    '''Handle tasks in queue'''
+    session = get_session()
+    while True:
+        try:
+            func, kwargs = queue.get(block=True, timeout=5)
+        except Queue.Empty:
+            if feeder_done.is_set():
+                # is this enough?
+                break
+            continue
+        kwargs['session'] = session
+        func(**kwargs)
+        queue.task_done()
+
+
+def check_build(queue, session, build):
+    '''Initial build check, plus queue deeper checks'''
+    state = koji.BUILD_STATES[build['state']]
+    build_dir = koji.pathinfo.build(build)
+    if state == 'BUILDING':
+        # ignore these
+        return
+    elif state in ('FAILED', 'DELETED', 'CANCELED'):
+        if not os.path.isdir(build_dir):
+            logger.error('Stray build directory: %s (build is %s)',
+                         build_dir, state)
+        # don't check further for these
+        return
+    elif state == 'COMPLETE':
+        if not os.path.isdir(build_dir):
+            logger.error('Build directory missing: %s', build_dir)
+            return
+    else:
+        # should not happen
+        raise ValueError('Build state is %s' % state)
+    queue.put([check_build_files, {'build': build}])
+
+
+def check_build_files(queue, session, build):
+    # TODO
+    pass
+
+
+if __name__ == '__main__':
+    main()

@@ -9,6 +9,8 @@ import time
 
 import koji as _koji  # koji declared using profile module in main()
 
+import rpm
+
 
 logger = logging.getLogger('koji.checkbuilds')
 
@@ -138,8 +140,35 @@ def check_build(session, build):
 
 
 def check_build_files(session, build):
-    # TODO
-    pass
+    check_build_rpms(session, build)
+    # TODO: other files
+
+
+def check_build_rpms(session, build):
+    build_dir = koji.pathinfo.build(build)  # XXX dup
+    for rpminfo in session.listRPMs(buildID=build['build_id']):
+        fn = '%s/%s' % (build_dir, koji.pathinfo.rpm(rpminfo))
+        try:
+            st = os.stat(fn)
+        except OSError as ex:
+            if ex.errno == 2:
+                logger.error('Missing rpm: %s', fn)
+                continue
+            raise
+        if st.st_size != rpminfo['size']:
+            logger.error('Wrong size for: %s', fn)
+            logger.error('  db: %i, file: %i', rpminfo['size'], st.st_size)
+        try:
+            hdr = koji.get_rpm_header(fn)
+            # ^NOTE: this call does not *verify*
+        except Exception:
+            logger.error('Unable to read header for: %s', fn)
+            continue
+        sigmd5 = koji.hex_string(hdr[rpm.RPMTAG_SIGMD5])
+        if rpminfo['payloadhash'] != sigmd5:
+            logger.error('Wrong sigmd5 for: %s', fn)
+            logger.error('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
+        # TODO verify sigmd5
 
 
 if __name__ == '__main__':

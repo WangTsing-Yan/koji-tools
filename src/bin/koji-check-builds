@@ -31,13 +31,25 @@ def main():
                       help='worker thread count')
     parser.add_option('-n', '--test', action='store_true', default=False,
                       help='test mode')
+    parser.add_option("-d", "--debug", action="store_true",
+                      help="show debug output")
+    parser.add_option("-v", "--verbose", action="store_true",
+                      help="show verbose output")
+    parser.add_option("-q", "--quiet", action="store_true", default=False,
+                      help="run quietly")
+
     opts, args = parser.parse_args()
 
     koji = _koji.get_profile_module(opts.profile)
 
     # TODO better logging config
     logging.basicConfig()
-    logger.setLevel(logging.DEBUG)  # TODO: verbosity options
+    if opts.debug:
+        logger.setLevel(logging.DEBUG)
+    elif opts.quiet:
+        logger.setLevel(logging.ERROR)
+    else:
+        logger.setLevel(logging.WARN)
 
     # start our threads
     fthread = threading.Thread(name='feeder', target=feeder_thread,
@@ -125,13 +137,13 @@ def check_build(session, build):
         return
     elif state in ('FAILED', 'DELETED', 'CANCELED'):
         if not os.path.isdir(build_dir):
-            logger.error('Stray build directory: %s (build is %s)',
+            logger.warn('Stray build directory: %s (build is %s)',
                          build_dir, state)
         # don't check further for these
         return
     elif state == 'COMPLETE':
         if not os.path.isdir(build_dir):
-            logger.error('Build directory missing: %s', build_dir)
+            logger.warn('Build directory missing: %s', build_dir)
             return
     else:
         # should not happen
@@ -141,34 +153,80 @@ def check_build(session, build):
 
 def check_build_files(session, build):
     check_build_rpms(session, build)
-    # TODO: other files
+    check_build_archives(session, build)
+    # TODO: other files?
 
 
 def check_build_rpms(session, build):
     build_dir = koji.pathinfo.build(build)  # XXX dup
     for rpminfo in session.listRPMs(buildID=build['build_id']):
         fn = '%s/%s' % (build_dir, koji.pathinfo.rpm(rpminfo))
+        if rpminfo['metadata_only']:
+            # TODO verify file not present
+            logger.debug('Skipping metadata-only rpm: %s', fn)
+            continue
         try:
             st = os.stat(fn)
         except OSError as ex:
             if ex.errno == 2:
-                logger.error('Missing rpm: %s', fn)
+                logger.warn('Missing rpm: %s', fn)
                 continue
             raise
         if st.st_size != rpminfo['size']:
-            logger.error('Wrong size for: %s', fn)
-            logger.error('  db: %i, file: %i', rpminfo['size'], st.st_size)
+            logger.warn('Wrong size for: %s', fn)
+            logger.warn('  db: %i, file: %i', rpminfo['size'], st.st_size)
         try:
             hdr = koji.get_rpm_header(fn)
             # ^NOTE: this call does not *verify*
         except Exception:
-            logger.error('Unable to read header for: %s', fn)
+            logger.warn('Unable to read header for: %s', fn)
             continue
         sigmd5 = koji.hex_string(hdr[rpm.RPMTAG_SIGMD5])
         if rpminfo['payloadhash'] != sigmd5:
-            logger.error('Wrong sigmd5 for: %s', fn)
-            logger.error('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
+            logger.warn('Wrong sigmd5 for: %s', fn)
+            logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
         # TODO verify sigmd5
+        # TODO verify sig headers
+        # TODO verify signed copies
+
+
+def check_build_archives(session, build):
+    # first gather archives
+    archives = {}
+    for legacy in ['maven', 'win', 'image']:
+        for archive in session.listArchives(buildID=build['build_id'], type=legacy):
+            archives.setdefault(archive['id'], archive)
+    for archive in session.listArchives(buildID=build['build_id']):
+        archives.setdefault(archive['id'], archive)
+
+    for archive in archives.values():
+        if archive['btype'] == 'maven':
+            fn = '%s/%s' % (koji.pathinfo.mavenbuild(build),
+                    koji.pathinfo.mavenfile(archive))
+        elif archive['btype'] == 'win':
+            fn = '%s/%s' % (koji.pathinfo.winbuild(build),
+                    koji.pathinfo.winfile(archive))
+        elif archive['btype'] == 'image':
+            fn = '%s/%s' % (koji.pathinfo.imagebuild(build),
+                    archive['filename'])
+        else:
+            fn = '%s/%s' % (koji.pathinfo.typedir(build, archive['btype']),
+                    archive['filename'])
+        if archive['metadata_only']:
+            # TODO verify file not present
+            logger.debug('Skipping metadata-only archive: %s', fn)
+            continue
+        try:
+            st = os.stat(fn)
+        except OSError as ex:
+            if ex.errno == 2:
+                logger.warn('Missing archive: %s', fn)
+                continue
+            raise
+        if st.st_size != archive['size']:
+            logger.warn('Wrong size for: %s', fn)
+            logger.warn('  db: %i, file: %i', archive['size'], st.st_size)
+    # TODO verify checksum
 
 
 if __name__ == '__main__':

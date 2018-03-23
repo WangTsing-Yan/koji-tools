@@ -214,19 +214,19 @@ class BuildChecker(object):
         '''Initial build check, plus queue deeper checks'''
         build = self.build
         state = koji.BUILD_STATES[build['state']]
-        build_dir = koji.pathinfo.build(build)
+        self.build_dir = koji.pathinfo.build(build)
         if state == 'BUILDING':
             # ignore these
             return
         elif state in ('FAILED', 'DELETED', 'CANCELED'):
-            if not os.path.isdir(build_dir):
+            if not os.path.isdir(self.build_dir):
                 logger.warn('Stray build directory: %s (build is %s)',
-                             build_dir, state)
+                             self.build_dir, state)
             # don't check further for these
             return
         elif state == 'COMPLETE':
-            if not os.path.isdir(build_dir):
-                logger.warn('Build directory missing: %s', build_dir)
+            if not os.path.isdir(self.build_dir):
+                logger.warn('Build directory missing: %s', self.build_dir)
                 return
         else:
             # should not happen
@@ -241,10 +241,9 @@ class BuildChecker(object):
     def check_rpms(self):
         build = self.build
         session = get_session()
-        build_dir = koji.pathinfo.build(build)  # XXX dup
         rpms = []
         for rpminfo in session.listRPMs(buildID=build['build_id']):
-            fn = '%s/%s' % (build_dir, koji.pathinfo.rpm(rpminfo))
+            fn = '%s/%s' % (self.build_dir, koji.pathinfo.rpm(rpminfo))
             if rpminfo['metadata_only']:
                 # TODO verify file not present
                 logger.debug('Skipping metadata-only rpm: %s', fn)
@@ -271,10 +270,10 @@ class BuildChecker(object):
                 logger.warn('Wrong sigmd5 for: %s', fn)
                 logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
             # TODO actually verify the rpm
-        self.check_rpm_sigs(build_dir, rpms)
+        self.check_rpm_sigs(rpms)
         # ^ separate task?
 
-    def check_rpm_sigs(self, builddir, rpms):
+    def check_rpm_sigs(self, rpms):
         '''Validate signature data on disc'''
         build = self.build
         session = get_session()
@@ -288,13 +287,13 @@ class BuildChecker(object):
                 sig_idx.setdefault(sig['sigkey'], []).append([rpminfo, sig])
         logger.debug('Keys for %s: %s', build['nvr'], sig_idx.keys())
         for sigkey in sig_idx:
-            cachedir = os.path.join(builddir, 'data/sigcache/%s' % sigkey)
+            cachedir = os.path.join(self.build_dir, 'data/sigcache/%s' % sigkey)
             if not os.path.isdir(cachedir):
                 logger.warning("Signature cache dir missing: %s", cachedir)
                 continue
             # else
             for rpminfo, sig in sig_idx[sigkey]:
-                cachefile = os.path.join(builddir, koji.pathinfo.sighdr(rpminfo, sigkey))
+                cachefile = os.path.join(self.build_dir, koji.pathinfo.sighdr(rpminfo, sigkey))
                 if not os.path.isfile(cachefile):
                     logger.warn("Cached signature missing: %s", cachefile)
                     continue
@@ -304,12 +303,12 @@ class BuildChecker(object):
                             '  db: %s, file:%s',
                             cachefile, sig['sighash'], sighash)
         for sigkey in sig_idx:
-            signeddir = os.path.join(builddir, 'data/signed/%s' % sigkey)
+            signeddir = os.path.join(self.build_dir, 'data/signed/%s' % sigkey)
             if not os.path.isdir(signeddir):
                 # ok - signed copies are temporary
                 continue
             for rpminfo, sig in sig_idx[sigkey]:
-                signed = os.path.join(builddir, koji.pathinfo.signed(rpminfo, sigkey))
+                signed = os.path.join(self.build_dir, koji.pathinfo.signed(rpminfo, sigkey))
                 if not os.path.exists(signed):
                     # still ok
                     continue

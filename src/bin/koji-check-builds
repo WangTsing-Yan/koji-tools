@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import Queue
+from functools import partial
 import logging
 import optparse
 import os
@@ -10,6 +11,7 @@ import time
 import dateutil
 import koji as _koji  # koji declared using profile module in main()
 from koji.util import md5_constructor
+from koji.util import sha1_constructor
 import rpm
 
 
@@ -367,6 +369,8 @@ class BuildChecker(object):
         for archive in session.listArchives(buildID=build['build_id']):
             archives.setdefault(archive['id'], archive)
 
+        logger.debug('Found %i archives for %s', len(archives), self.build['nvr'])
+        self.archives = []
         for archive in archives.values():
             if archive['btype'] == 'maven':
                 fn = '%s/%s' % (koji.pathinfo.mavenbuild(build),
@@ -380,11 +384,13 @@ class BuildChecker(object):
             else:
                 fn = '%s/%s' % (koji.pathinfo.typedir(build, archive['btype']),
                         archive['filename'])
+            archive['_fn'] = fn
             if archive['metadata_only']:
                 if os.path.lexists(fn):
                     logger.warn('Metadata-only rpm is present: %s', fn)
                 logger.debug('Skipping metadata-only archive: %s', fn)
                 continue
+            self.archives.append(archive)
             try:
                 st = os.stat(fn)
             except OSError as ex:
@@ -395,7 +401,40 @@ class BuildChecker(object):
             if st.st_size != archive['size']:
                 logger.warn('Wrong size for: %s', fn)
                 logger.warn('  db: %i, file: %i', archive['size'], st.st_size)
-        # TODO verify checksum
+        queue.put([self.verify_archives, {}])
+
+    def verify_archives(self):
+        logger.debug('Checking %i archive checksums for %s', len(self.archives),
+                self.build['nvr'])
+        for archive in self.archives:
+            self.verify_checksum(archive['_fn'], archive['checksum_type'],
+                    archive['checksum'])
+
+    def verify_checksum(self, fn, sumtype, expect):
+        try:
+            sumtype = koji.CHECKSUM_TYPES[sumtype]
+        except KeyError:
+            logger.error('Unknown sum type %s for %s', sumtype, fn)
+            return
+        if sumtype == 'md5':
+            chk = md5_constructor()
+        elif sumtype == 'sha1':
+            chk = sha1_constructor()
+        else:
+            # XXX
+            logger.error('Unsupported sum type %s for %s', sumtype, fn)
+            return
+        logger.debug('Checking %s for %s', sumtype, fn)
+        with file(fn, 'r') as fp:
+            chunks = iter(partial(fp.read, 819200), b'')
+            [chk.update(b) for b in chunks]
+        value = chk.hexdigest()
+        if value != expect:
+            logger.warn('Checksum mismatch (%s) for %s\n'
+                    '  db: %s, file: %s',
+                    sumtype, fn, expect, value)
+
+
 
 
 if __name__ == '__main__':

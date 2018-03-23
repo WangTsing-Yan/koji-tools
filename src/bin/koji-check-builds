@@ -238,17 +238,25 @@ class BuildChecker(object):
         self.check_archives()
         # TODO: other files?
 
-    def check_rpms(self):
-        build = self.build
+    def get_rpms(self):
+        '''Get rpms to check'''
         session = get_session()
         rpms = []
-        for rpminfo in session.listRPMs(buildID=build['build_id']):
+        for rpminfo in session.listRPMs(buildID=self.build['build_id']):
             fn = '%s/%s' % (self.build_dir, koji.pathinfo.rpm(rpminfo))
+            rpminfo['_fn'] = fn
             if rpminfo['metadata_only']:
                 # TODO verify file not present
                 logger.debug('Skipping metadata-only rpm: %s', fn)
                 continue
             rpms.append(rpminfo)
+        self.rpms = rpms
+        return rpms
+
+    def check_rpms(self):
+        self.get_rpms()
+        for rpminfo in self.rpms:
+            fn = rpminfo['_fn']
             try:
                 st = os.stat(fn)
             except OSError as ex:
@@ -270,18 +278,18 @@ class BuildChecker(object):
                 logger.warn('Wrong sigmd5 for: %s', fn)
                 logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
             # TODO actually verify the rpm
-        self.check_rpm_sigs(rpms)
+        self.check_rpm_sigs()
         # ^ separate task?
 
-    def check_rpm_sigs(self, rpms):
+    def check_rpm_sigs(self):
         '''Validate signature data on disc'''
         build = self.build
         session = get_session()
         sig_idx = {}
         session.multicall = True
-        for rpminfo in rpms:
+        for rpminfo in self.rpms:
             session.queryRPMSigs(rpm_id=rpminfo['id'])
-        for rpminfo, [sigs] in zip(rpms, session.multiCall(strict=True)):
+        for rpminfo, [sigs] in zip(self.rpms, session.multiCall(strict=True)):
             sigs = session.queryRPMSigs(rpm_id=rpminfo['id'])
             for sig in sigs:
                 sig_idx.setdefault(sig['sigkey'], []).append([rpminfo, sig])

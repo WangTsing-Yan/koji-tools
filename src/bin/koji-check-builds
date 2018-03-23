@@ -48,6 +48,7 @@ def main():
     parser.add_option("--prefix", help="Only list packages starting with this prefix")
     parser.add_option("--owner", help="List builds built by this owner")
     parser.add_option("--volume", help="List builds by volume ID")
+    # TODO ignore options
 
     opts, args = parser.parse_args()
 
@@ -246,7 +247,8 @@ class BuildChecker(object):
             fn = '%s/%s' % (self.build_dir, koji.pathinfo.rpm(rpminfo))
             rpminfo['_fn'] = fn
             if rpminfo['metadata_only']:
-                # TODO verify file not present
+                if os.path.lexists(fn):
+                    logger.warn('Metadata-only rpm is present: %s', fn)
                 logger.debug('Skipping metadata-only rpm: %s', fn)
                 continue
             rpms.append(rpminfo)
@@ -354,7 +356,8 @@ class BuildChecker(object):
                 fn = '%s/%s' % (koji.pathinfo.typedir(build, archive['btype']),
                         archive['filename'])
             if archive['metadata_only']:
-                # TODO verify file not present
+                if os.path.lexists(fn):
+                    logger.warn('Metadata-only rpm is present: %s', fn)
                 logger.debug('Skipping metadata-only archive: %s', fn)
                 continue
             try:

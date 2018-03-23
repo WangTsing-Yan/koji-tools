@@ -116,7 +116,8 @@ def feeder_thread(opts, args):
             # avoid overloading the queue
             logger.debug('queue is large')
             time.sleep(5)
-        queue.put([check_build, {'build': build}])
+        checker = BuildChecker(build)
+        queue.put([checker.check, {}])
         logger.debug("queueing build %(nvr)s", build)
 
 
@@ -204,154 +205,163 @@ def worker_thread(opts):
         queue.task_done()
 
 
-def check_build(build):
-    '''Initial build check, plus queue deeper checks'''
-    state = koji.BUILD_STATES[build['state']]
-    build_dir = koji.pathinfo.build(build)
-    if state == 'BUILDING':
-        # ignore these
-        return
-    elif state in ('FAILED', 'DELETED', 'CANCELED'):
-        if not os.path.isdir(build_dir):
-            logger.warn('Stray build directory: %s (build is %s)',
-                         build_dir, state)
-        # don't check further for these
-        return
-    elif state == 'COMPLETE':
-        if not os.path.isdir(build_dir):
-            logger.warn('Build directory missing: %s', build_dir)
+class BuildChecker(object):
+
+    def __init__(self, build):
+        self.build = build
+
+    def check(self):
+        '''Initial build check, plus queue deeper checks'''
+        build = self.build
+        state = koji.BUILD_STATES[build['state']]
+        build_dir = koji.pathinfo.build(build)
+        if state == 'BUILDING':
+            # ignore these
             return
-    else:
-        # should not happen
-        raise ValueError('Build state is %s' % state)
-    queue.put([check_build_files, {'build': build}])
-
-
-def check_build_files(build):
-    check_build_rpms(build)
-    check_build_archives(build)
-    # TODO: other files?
-
-
-def check_build_rpms(build):
-    session = get_session()
-    build_dir = koji.pathinfo.build(build)  # XXX dup
-    rpms = []
-    for rpminfo in session.listRPMs(buildID=build['build_id']):
-        fn = '%s/%s' % (build_dir, koji.pathinfo.rpm(rpminfo))
-        if rpminfo['metadata_only']:
-            # TODO verify file not present
-            logger.debug('Skipping metadata-only rpm: %s', fn)
-            continue
-        rpms.append(rpminfo)
-        try:
-            st = os.stat(fn)
-        except OSError as ex:
-            if ex.errno == 2:
-                logger.warn('Missing rpm: %s', fn)
-                continue
-            raise
-        if st.st_size != rpminfo['size']:
-            logger.warn('Wrong size for: %s', fn)
-            logger.warn('  db: %i, file: %i', rpminfo['size'], st.st_size)
-        try:
-            hdr = koji.get_rpm_header(fn)
-            # ^NOTE: this call does not *verify*
-        except Exception:
-            logger.warn('Unable to read header for: %s', fn)
-            continue
-        sigmd5 = koji.hex_string(hdr[rpm.RPMTAG_SIGMD5])
-        if rpminfo['payloadhash'] != sigmd5:
-            logger.warn('Wrong sigmd5 for: %s', fn)
-            logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
-        # TODO actually verify the rpm
-    check_build_rpm_sigs(build, build_dir, rpms)
-    # ^ separate task?
-
-
-def check_build_rpm_sigs(build, builddir, rpms):
-    '''Validate signature data on disc'''
-    session = get_session()
-    sig_idx = {}
-    for rpminfo in rpms:
-        sigs = session.queryRPMSigs(rpm_id=rpminfo['id'])
-        for sig in sigs:
-            sig_idx.setdefault(sig['sigkey'], []).append([rpminfo, sig])
-    logger.debug('Keys for %s: %s', build['nvr'], sig_idx.keys())
-    for sigkey in sig_idx:
-        cachedir = os.path.join(builddir, 'data/sigcache/%s' % sigkey)
-        if not os.path.isdir(cachedir):
-            logger.warning("Signature cache dir missing: %s", cachedir)
-            continue
-        # else
-        for rpminfo, sig in sig_idx[sigkey]:
-            cachefile = os.path.join(builddir, koji.pathinfo.sighdr(rpminfo, sigkey))
-            if not os.path.isfile(cachefile):
-                logger.warn("Cached signature missing: %s", cachefile)
-                continue
-            sighash = md5_constructor(file(cachefile).read()).hexdigest()
-            if sighash != sig['sighash']:
-                logger.warn('Cached signature mismatch for %s\n'
-                        '  db: %s, file:%s',
-                        cachefile, sig['sighash'], sighash)
-    for sigkey in sig_idx:
-        signeddir = os.path.join(builddir, 'data/signed/%s' % sigkey)
-        if not os.path.isdir(signeddir):
-            # ok - signed copies are temporary
-            continue
-        for rpminfo, sig in sig_idx[sigkey]:
-            signed = os.path.join(builddir, koji.pathinfo.signed(rpminfo, sigkey))
-            if not os.path.exists(signed):
-                # still ok
-                continue
-            # check that sig header is matches
-            hdr = koji.rip_rpm_sighdr(signed)
-            sighash = md5_constructor(hdr).hexdigest()
-            if sighash != sig['sighash']:
-                logger.warn('Signed copy sighdr mismatch: %s\n'
-                        '  db: %s, file: %s',
-                        signed, sig['sighash'], sighash)
-            # TODO: verify signed copy
-
-
-def check_build_archives(build):
-    session = get_session()
-    # first gather archives
-    archives = {}
-    for legacy in ['maven', 'win', 'image']:
-        for archive in session.listArchives(buildID=build['build_id'], type=legacy):
-            archives.setdefault(archive['id'], archive)
-    for archive in session.listArchives(buildID=build['build_id']):
-        archives.setdefault(archive['id'], archive)
-
-    for archive in archives.values():
-        if archive['btype'] == 'maven':
-            fn = '%s/%s' % (koji.pathinfo.mavenbuild(build),
-                    koji.pathinfo.mavenfile(archive))
-        elif archive['btype'] == 'win':
-            fn = '%s/%s' % (koji.pathinfo.winbuild(build),
-                    koji.pathinfo.winfile(archive))
-        elif archive['btype'] == 'image':
-            fn = '%s/%s' % (koji.pathinfo.imagebuild(build),
-                    archive['filename'])
+        elif state in ('FAILED', 'DELETED', 'CANCELED'):
+            if not os.path.isdir(build_dir):
+                logger.warn('Stray build directory: %s (build is %s)',
+                             build_dir, state)
+            # don't check further for these
+            return
+        elif state == 'COMPLETE':
+            if not os.path.isdir(build_dir):
+                logger.warn('Build directory missing: %s', build_dir)
+                return
         else:
-            fn = '%s/%s' % (koji.pathinfo.typedir(build, archive['btype']),
-                    archive['filename'])
-        if archive['metadata_only']:
-            # TODO verify file not present
-            logger.debug('Skipping metadata-only archive: %s', fn)
-            continue
-        try:
-            st = os.stat(fn)
-        except OSError as ex:
-            if ex.errno == 2:
-                logger.warn('Missing archive: %s', fn)
+            # should not happen
+            raise ValueError('Build state is %s' % state)
+        queue.put([self.check_build_files, {}])
+
+    def check_build_files(self):
+        self.check_build_rpms()
+        self.check_build_archives()
+        # TODO: other files?
+
+    def check_build_rpms(self):
+        build = self.build
+        session = get_session()
+        build_dir = koji.pathinfo.build(build)  # XXX dup
+        rpms = []
+        for rpminfo in session.listRPMs(buildID=build['build_id']):
+            fn = '%s/%s' % (build_dir, koji.pathinfo.rpm(rpminfo))
+            if rpminfo['metadata_only']:
+                # TODO verify file not present
+                logger.debug('Skipping metadata-only rpm: %s', fn)
                 continue
-            raise
-        if st.st_size != archive['size']:
-            logger.warn('Wrong size for: %s', fn)
-            logger.warn('  db: %i, file: %i', archive['size'], st.st_size)
-    # TODO verify checksum
+            rpms.append(rpminfo)
+            try:
+                st = os.stat(fn)
+            except OSError as ex:
+                if ex.errno == 2:
+                    logger.warn('Missing rpm: %s', fn)
+                    continue
+                raise
+            if st.st_size != rpminfo['size']:
+                logger.warn('Wrong size for: %s', fn)
+                logger.warn('  db: %i, file: %i', rpminfo['size'], st.st_size)
+            try:
+                hdr = koji.get_rpm_header(fn)
+                # ^NOTE: this call does not *verify*
+            except Exception:
+                logger.warn('Unable to read header for: %s', fn)
+                continue
+            sigmd5 = koji.hex_string(hdr[rpm.RPMTAG_SIGMD5])
+            if rpminfo['payloadhash'] != sigmd5:
+                logger.warn('Wrong sigmd5 for: %s', fn)
+                logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
+            # TODO actually verify the rpm
+        self.check_build_rpm_sigs(build_dir, rpms)
+        # ^ separate task?
+
+    def check_build_rpm_sigs(self, builddir, rpms):
+        '''Validate signature data on disc'''
+        build = self.build
+        session = get_session()
+        sig_idx = {}
+        session.multicall = True
+        for rpminfo in rpms:
+            session.queryRPMSigs(rpm_id=rpminfo['id'])
+        for rpminfo, [sigs] in zip(rpms, session.multiCall(strict=True)):
+            sigs = session.queryRPMSigs(rpm_id=rpminfo['id'])
+            for sig in sigs:
+                sig_idx.setdefault(sig['sigkey'], []).append([rpminfo, sig])
+        logger.debug('Keys for %s: %s', build['nvr'], sig_idx.keys())
+        for sigkey in sig_idx:
+            cachedir = os.path.join(builddir, 'data/sigcache/%s' % sigkey)
+            if not os.path.isdir(cachedir):
+                logger.warning("Signature cache dir missing: %s", cachedir)
+                continue
+            # else
+            for rpminfo, sig in sig_idx[sigkey]:
+                cachefile = os.path.join(builddir, koji.pathinfo.sighdr(rpminfo, sigkey))
+                if not os.path.isfile(cachefile):
+                    logger.warn("Cached signature missing: %s", cachefile)
+                    continue
+                sighash = md5_constructor(file(cachefile).read()).hexdigest()
+                if sighash != sig['sighash']:
+                    logger.warn('Cached signature mismatch for %s\n'
+                            '  db: %s, file:%s',
+                            cachefile, sig['sighash'], sighash)
+        for sigkey in sig_idx:
+            signeddir = os.path.join(builddir, 'data/signed/%s' % sigkey)
+            if not os.path.isdir(signeddir):
+                # ok - signed copies are temporary
+                continue
+            for rpminfo, sig in sig_idx[sigkey]:
+                signed = os.path.join(builddir, koji.pathinfo.signed(rpminfo, sigkey))
+                if not os.path.exists(signed):
+                    # still ok
+                    continue
+                # check that sig header is matches
+                hdr = koji.rip_rpm_sighdr(signed)
+                sighash = md5_constructor(hdr).hexdigest()
+                if sighash != sig['sighash']:
+                    logger.warn('Signed copy sighdr mismatch: %s\n'
+                            '  db: %s, file: %s',
+                            signed, sig['sighash'], sighash)
+                # TODO: verify signed copy
+
+
+    def check_build_archives(self):
+        build = self.build
+        session = get_session()
+        # first gather archives
+        archives = {}
+        for legacy in ['maven', 'win', 'image']:
+            for archive in session.listArchives(buildID=build['build_id'], type=legacy):
+                archives.setdefault(archive['id'], archive)
+        for archive in session.listArchives(buildID=build['build_id']):
+            archives.setdefault(archive['id'], archive)
+
+        for archive in archives.values():
+            if archive['btype'] == 'maven':
+                fn = '%s/%s' % (koji.pathinfo.mavenbuild(build),
+                        koji.pathinfo.mavenfile(archive))
+            elif archive['btype'] == 'win':
+                fn = '%s/%s' % (koji.pathinfo.winbuild(build),
+                        koji.pathinfo.winfile(archive))
+            elif archive['btype'] == 'image':
+                fn = '%s/%s' % (koji.pathinfo.imagebuild(build),
+                        archive['filename'])
+            else:
+                fn = '%s/%s' % (koji.pathinfo.typedir(build, archive['btype']),
+                        archive['filename'])
+            if archive['metadata_only']:
+                # TODO verify file not present
+                logger.debug('Skipping metadata-only archive: %s', fn)
+                continue
+            try:
+                st = os.stat(fn)
+            except OSError as ex:
+                if ex.errno == 2:
+                    logger.warn('Missing archive: %s', fn)
+                    continue
+                raise
+            if st.st_size != archive['size']:
+                logger.warn('Wrong size for: %s', fn)
+                logger.warn('  db: %i, file: %i', archive['size'], st.st_size)
+        # TODO verify checksum
 
 
 if __name__ == '__main__':

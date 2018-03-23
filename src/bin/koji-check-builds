@@ -231,14 +231,14 @@ class BuildChecker(object):
         else:
             # should not happen
             raise ValueError('Build state is %s' % state)
-        queue.put([self.check_build_files, {}])
+        queue.put([self.check_files, {}])
 
-    def check_build_files(self):
-        self.check_build_rpms()
-        self.check_build_archives()
+    def check_files(self):
+        self.check_rpms()
+        self.check_archives()
         # TODO: other files?
 
-    def check_build_rpms(self):
+    def check_rpms(self):
         build = self.build
         session = get_session()
         build_dir = koji.pathinfo.build(build)  # XXX dup
@@ -271,10 +271,10 @@ class BuildChecker(object):
                 logger.warn('Wrong sigmd5 for: %s', fn)
                 logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
             # TODO actually verify the rpm
-        self.check_build_rpm_sigs(build_dir, rpms)
+        self.check_rpm_sigs(build_dir, rpms)
         # ^ separate task?
 
-    def check_build_rpm_sigs(self, builddir, rpms):
+    def check_rpm_sigs(self, builddir, rpms):
         '''Validate signature data on disc'''
         build = self.build
         session = get_session()
@@ -322,8 +322,7 @@ class BuildChecker(object):
                             signed, sig['sighash'], sighash)
                 # TODO: verify signed copy
 
-
-    def check_build_archives(self):
+    def check_archives(self):
         build = self.build
         session = get_session()
         # first gather archives

@@ -90,7 +90,19 @@ def main():
         wthread.join()
 
 
+sessions = threading.local()
+
+
 def get_session():
+    '''Get session for this thread, create if needed'''
+    try:
+        return sessions.session
+    except AttributeError:
+        sessions.session = _get_session()
+        return sessions.session
+
+
+def _get_session():
     '''Get a new anonymous session'''
     session_opts = koji.grab_session_options(koji.config)
     session_opts['anon_retry'] = True
@@ -99,8 +111,7 @@ def get_session():
 
 def feeder_thread(opts, args):
     '''Fetch builds and feed them into the queu'''
-    session = get_session()
-    for build in get_builds(session, opts, args):
+    for build in get_builds(opts, args):
         while queue.qsize() > 1000:
             # avoid overloading the queue
             logger.debug('queue is large')
@@ -109,8 +120,9 @@ def feeder_thread(opts, args):
         logger.debug("queueing build %(nvr)s", build)
 
 
-def get_builds(session, options, args):
+def get_builds(options, args):
     '''Yield all requested builds'''
+    session = get_session()
     chunksize = 10000
     opts = {}
     opts['queryOpts'] = {'order': 'build.id', 'offset': 0, 'limit': chunksize}
@@ -180,7 +192,6 @@ def get_builds(session, options, args):
 
 def worker_thread(opts):
     '''Handle tasks in queue'''
-    session = get_session()
     while True:
         try:
             func, kwargs = queue.get(block=True, timeout=5)
@@ -189,12 +200,11 @@ def worker_thread(opts):
                 # is this enough?
                 break
             continue
-        kwargs['session'] = session
         func(**kwargs)
         queue.task_done()
 
 
-def check_build(session, build):
+def check_build(build):
     '''Initial build check, plus queue deeper checks'''
     state = koji.BUILD_STATES[build['state']]
     build_dir = koji.pathinfo.build(build)
@@ -217,13 +227,14 @@ def check_build(session, build):
     queue.put([check_build_files, {'build': build}])
 
 
-def check_build_files(session, build):
-    check_build_rpms(session, build)
-    check_build_archives(session, build)
+def check_build_files(build):
+    check_build_rpms(build)
+    check_build_archives(build)
     # TODO: other files?
 
 
-def check_build_rpms(session, build):
+def check_build_rpms(build):
+    session = get_session()
     build_dir = koji.pathinfo.build(build)  # XXX dup
     rpms = []
     for rpminfo in session.listRPMs(buildID=build['build_id']):
@@ -254,12 +265,13 @@ def check_build_rpms(session, build):
             logger.warn('Wrong sigmd5 for: %s', fn)
             logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
         # TODO actually verify the rpm
-    check_build_rpm_sigs(session, build, build_dir, rpms)
+    check_build_rpm_sigs(build, build_dir, rpms)
     # ^ separate task?
 
 
-def check_build_rpm_sigs(session, build, builddir, rpms):
+def check_build_rpm_sigs(build, builddir, rpms):
     '''Validate signature data on disc'''
+    session = get_session()
     sig_idx = {}
     for rpminfo in rpms:
         sigs = session.queryRPMSigs(rpm_id=rpminfo['id'])
@@ -302,7 +314,8 @@ def check_build_rpm_sigs(session, build, builddir, rpms):
             # TODO: verify signed copy
 
 
-def check_build_archives(session, build):
+def check_build_archives(build):
+    session = get_session()
     # first gather archives
     archives = {}
     for legacy in ['maven', 'win', 'image']:

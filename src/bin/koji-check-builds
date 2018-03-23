@@ -279,9 +279,24 @@ class BuildChecker(object):
             if rpminfo['payloadhash'] != sigmd5:
                 logger.warn('Wrong sigmd5 for: %s', fn)
                 logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
-            # TODO actually verify the rpm
         self.check_rpm_sigs()
+        queue.put([self.verify_rpms, {}])
         # ^ separate task?
+
+    def verify_rpms(self):
+        '''Actually verify the embedded checksums'''
+        # should we just combine this with the earlier header check?
+        ts = rpm.TransactionSet()
+        ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
+        for rpminfo in self.rpms:
+            fn = rpminfo['_fn']
+            with open(fn, 'r') as fp:
+                try:
+                    ts.hdrFromFdno(fp.fileno())
+                except rpm.error as ex:
+                    logger.warn('Could not verify rpm %s: %s', fn, ex)
+                except Exception as ex:
+                    logger.exception("Error verifying rpm: %s", fn)
 
     def check_rpm_sigs(self):
         '''Validate signature data on disc'''

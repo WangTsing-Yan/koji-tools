@@ -9,6 +9,7 @@ import time
 
 import dateutil
 import koji as _koji  # koji declared using profile module in main()
+from koji.util import md5_constructor
 import rpm
 
 
@@ -224,12 +225,14 @@ def check_build_files(session, build):
 
 def check_build_rpms(session, build):
     build_dir = koji.pathinfo.build(build)  # XXX dup
+    rpms = []
     for rpminfo in session.listRPMs(buildID=build['build_id']):
         fn = '%s/%s' % (build_dir, koji.pathinfo.rpm(rpminfo))
         if rpminfo['metadata_only']:
             # TODO verify file not present
             logger.debug('Skipping metadata-only rpm: %s', fn)
             continue
+        rpms.append(rpminfo)
         try:
             st = os.stat(fn)
         except OSError as ex:
@@ -250,9 +253,53 @@ def check_build_rpms(session, build):
         if rpminfo['payloadhash'] != sigmd5:
             logger.warn('Wrong sigmd5 for: %s', fn)
             logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
-        # TODO verify sigmd5
-        # TODO verify sig headers
-        # TODO verify signed copies
+        # TODO actually verify the rpm
+    check_build_rpm_sigs(session, build, build_dir, rpms)
+    # ^ separate task?
+
+
+def check_build_rpm_sigs(session, build, builddir, rpms):
+    '''Validate signature data on disc'''
+    sig_idx = {}
+    for rpminfo in rpms:
+        sigs = session.queryRPMSigs(rpm_id=rpminfo['id'])
+        for sig in sigs:
+            sig_idx.setdefault(sig['sigkey'], []).append([rpminfo, sig])
+    logger.debug('Keys for %s: %s', build['nvr'], sig_idx.keys())
+    for sigkey in sig_idx:
+        cachedir = os.path.join(builddir, 'data/sigcache/%s' % sigkey)
+        if not os.path.isdir(cachedir):
+            logger.warning("Signature cache dir missing: %s", cachedir)
+            continue
+        # else
+        for rpminfo, sig in sig_idx[sigkey]:
+            cachefile = os.path.join(builddir, koji.pathinfo.sighdr(rpminfo, sigkey))
+            if not os.path.isfile(cachefile):
+                logger.warn("Cached signature missing: %s", cachefile)
+                continue
+            sighash = md5_constructor(file(cachefile).read()).hexdigest()
+            if sighash != sig['sighash']:
+                logger.warn('Cached signature mismatch for %s\n'
+                        '  db: %s, file:%s',
+                        cachefile, sig['sighash'], sighash)
+    for sigkey in sig_idx:
+        signeddir = os.path.join(builddir, 'data/signed/%s' % sigkey)
+        if not os.path.isdir(signeddir):
+            # ok - signed copies are temporary
+            continue
+        for rpminfo, sig in sig_idx[sigkey]:
+            signed = os.path.join(builddir, koji.pathinfo.signed(rpminfo, sigkey))
+            if not os.path.exists(signed):
+                # still ok
+                continue
+            # check that sig header is matches
+            hdr = koji.rip_rpm_sighdr(signed)
+            sighash = md5_constructor(hdr).hexdigest()
+            if sighash != sig['sighash']:
+                logger.warn('Signed copy sighdr mismatch: %s\n'
+                        '  db: %s, file: %s',
+                        signed, sig['sighash'], sighash)
+            # TODO: verify signed copy
 
 
 def check_build_archives(session, build):

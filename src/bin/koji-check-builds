@@ -290,13 +290,16 @@ class BuildChecker(object):
         ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
         for rpminfo in self.rpms:
             fn = rpminfo['_fn']
-            with open(fn, 'r') as fp:
-                try:
-                    ts.hdrFromFdno(fp.fileno())
-                except rpm.error as ex:
-                    logger.warn('Could not verify rpm %s: %s', fn, ex)
-                except Exception as ex:
-                    logger.exception("Error verifying rpm: %s", fn)
+            self.verify_rpm(fn, ts)
+
+    def verify_rpm(self, fn, ts):
+        with open(fn, 'r') as fp:
+            try:
+                ts.hdrFromFdno(fp.fileno())
+            except rpm.error as ex:
+                logger.warn('Could not verify rpm %s: %s', fn, ex)
+            except Exception as ex:
+                logger.exception("Error verifying rpm: %s", fn)
 
     def check_rpm_sigs(self):
         '''Validate signature data on disc'''
@@ -327,6 +330,7 @@ class BuildChecker(object):
                     logger.warn('Cached signature mismatch for %s\n'
                             '  db: %s, file:%s',
                             cachefile, sig['sighash'], sighash)
+        signed_to_check = []
         for sigkey in sig_idx:
             signeddir = os.path.join(self.build_dir, 'data/signed/%s' % sigkey)
             if not os.path.isdir(signeddir):
@@ -337,14 +341,20 @@ class BuildChecker(object):
                 if not os.path.exists(signed):
                     # still ok
                     continue
-                # check that sig header is matches
+                signed_to_check.append(signed)
+                # check that sig header matches
                 hdr = koji.rip_rpm_sighdr(signed)
                 sighash = md5_constructor(hdr).hexdigest()
                 if sighash != sig['sighash']:
                     logger.warn('Signed copy sighdr mismatch: %s\n'
                             '  db: %s, file: %s',
                             signed, sig['sighash'], sighash)
-                # TODO: verify signed copy
+        ts = rpm.TransactionSet()
+        ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
+        logger.debug('Verifying %i signed copies for %s',
+                len(signed_to_check), self.build['nvr'])
+        for fn in signed_to_check:
+            self.verify_rpm(fn, ts)
 
     def check_archives(self):
         build = self.build

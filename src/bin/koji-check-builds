@@ -89,14 +89,26 @@ def main():
         wthread.start()
         threads.append(wthread)
 
+    mthread = threading.Thread(name='monitor', target=monitor_thread,
+                               args=(fthread, queue, threads))
+    mthread.setDaemon(True)
+    mthread.start()
+    while mthread.isAlive():
+        mthread.join(timeout=5)
+
+
+def monitor_thread(fthread, queue, threads):
+    """Monitor the other threads"""
+    # this part is its own thread so that the main thread can handle ctrl-c
+
     # the builds thread will be the first to finish
     fthread.join()
     feeder_done.set()
 
-    # now we wait for the queue to be empty
+    # wait for the queue to be empty
     queue.join()
 
-    print('Finished. Waiting for workers to stop.')
+    logger.info('Finished. Waiting for workers to stop.')
     for wthread in threads:
         wthread.join()
 

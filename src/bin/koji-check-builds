@@ -64,6 +64,8 @@ def main():
         logger.setLevel(logging.DEBUG)
     elif opts.quiet:
         logger.setLevel(logging.ERROR)
+    elif opts.verbose:
+        logger.setLevel(logging.INFO)
     else:
         logger.setLevel(logging.WARN)
 
@@ -114,14 +116,15 @@ def _get_session():
 
 def feeder_thread(opts, args):
     '''Fetch builds and feed them into the queu'''
-    for build in get_builds(opts, args):
+    for i, build in enumerate(get_builds(opts, args)):
         while queue.qsize() > 1000:
             # avoid overloading the queue
-            logger.debug('queue is large')
+            logger.debug('feeder waiting. queue is large')
             time.sleep(5)
         checker = BuildChecker(build)
         queue.put([checker.check, {}])
-        logger.debug("queueing build %(nvr)s", build)
+        logger.debug("%i: queueing build %s", i, build['nvr'])
+    logger.info('%i builds queued', i)
 
 
 def get_builds(options, args):
@@ -184,9 +187,7 @@ def get_builds(options, args):
         opts['completeAfter'] = getattr(options, 'after')
 
     while True:
-        logger.debug("chunk")
         chunk = session.listBuilds(**opts)
-        logger.debug("got chunk")
         if not chunk:
             break
         opts['queryOpts']['offset'] += chunksize

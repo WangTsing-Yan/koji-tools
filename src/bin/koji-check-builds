@@ -371,12 +371,13 @@ class BuildChecker(object):
                     logger.warn('Signed copy sighdr mismatch: %s\n'
                             '  db: %s, file: %s',
                             signed, sig['sighash'], sighash)
-        ts = rpm.TransactionSet()
-        ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
-        logger.debug('Verifying %i signed copies for %s',
-                len(signed_to_check), self.build['nvr'])
-        for fn in signed_to_check:
-            self.verify_rpm(fn, ts)
+        if not self.options.no_sums:
+            ts = rpm.TransactionSet()
+            ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
+            logger.debug('Verifying %i signed copies for %s',
+                    len(signed_to_check), self.build['nvr'])
+            for fn in signed_to_check:
+                self.verify_rpm(fn, ts)
 
     def check_archives(self):
         build = self.build

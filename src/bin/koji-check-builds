@@ -55,8 +55,12 @@ def main():
     # options for what to check
     parser.add_option("--ignore-strays", action='store_true',
                       help="Ignore stray files")
+    parser.add_option("--ignore-rpm-size", action='store_true',
+                      help="Ignore rpm size")
+    # ^ if an rpm has been signed in place, the sigmd5 will still match the db,
+    #   but the size will likely change
     parser.add_option("--no-sums", action='store_true',
-                      help="Don't check checksums")
+                      help="Don't validate checksums")
 
     opts, args = parser.parse_args()
 
@@ -288,7 +292,7 @@ class BuildChecker(object):
                     logger.warn('Missing rpm: %s', fn)
                     continue
                 raise
-            if st.st_size != rpminfo['size']:
+            if not self.options.ignore_rpm_size and st.st_size != rpminfo['size']:
                 logger.warn('Wrong size for: %s', fn)
                 logger.warn('  db: %i, file: %i', rpminfo['size'], st.st_size)
             try:

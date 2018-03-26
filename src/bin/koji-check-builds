@@ -40,16 +40,16 @@ def main():
     parser.add_option("-q", "--quiet", action="store_true", default=False,
                       help="run quietly")
     # build selection options
-    parser.add_option("--package", help="List builds for this package")
-    parser.add_option("--buildid", help="List specific build from ID or nvr")
+    parser.add_option("--buildid", help="Check specific build from ID or nvr")
+    parser.add_option("--package", help="Check builds for this package")
     parser.add_option("--before",
-                      help="List builds built before this time")
+                      help="Check builds built before this time")
     parser.add_option("--after",
-                      help="List builds built after this time")
-    parser.add_option("--type", help="List builds of this type.")
-    parser.add_option("--prefix", help="Only list packages starting with this prefix")
-    parser.add_option("--owner", help="List builds built by this owner")
-    parser.add_option("--volume", help="List builds by volume ID")
+                      help="Check builds built after this time")
+    parser.add_option("--type", help="Check builds of this type.")
+    parser.add_option("--owner", help="Check builds built by this owner")
+    parser.add_option("--volume", help="Check builds by volume ID")
+    parser.add_option("--prefix", help="Only check packages starting with this prefix")
     # TODO ignore options
 
     opts, args = parser.parse_args()

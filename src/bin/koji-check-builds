@@ -152,6 +152,14 @@ def feeder_thread(opts, args):
 def get_builds(options, args):
     '''Yield all requested builds'''
     session = get_session()
+    if options.buildid:
+        try:
+            buildid = int(options.buildid)
+        except ValueError:
+            buildid = options.buildid
+        binfo = session.getBuild(buildid, strict=True)
+        yield binfo
+        return
     chunksize = 10000
     opts = {}
     opts['queryOpts'] = {'order': 'build.id', 'offset': 0, 'limit': chunksize}

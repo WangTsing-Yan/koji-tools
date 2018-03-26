@@ -27,11 +27,11 @@ queue = Queue.Queue()
 def main():
     global koji
     parser = optparse.OptionParser(usage='%prog [options]')
-    parser.add_option('-p', '--profile', default='BOGUS',
+    parser.add_option('-p', '--profile', default='koji',
                       help='pick a profile')
-    # ^ XXX fix default later
     parser.add_option('-j', '--threads', default=5, type='int',
                       help='worker thread count')
+
     # verbosity options
     parser.add_option("-d", "--debug", action="store_true",
                       help="show debug output")
@@ -39,6 +39,7 @@ def main():
                       help="show verbose output")
     parser.add_option("-q", "--quiet", action="store_true", default=False,
                       help="run quietly")
+
     # build selection options
     parser.add_option("--buildid", help="Check specific build from ID or nvr")
     parser.add_option("--package", help="Check builds for this package")
@@ -50,7 +51,12 @@ def main():
     parser.add_option("--owner", help="Check builds built by this owner")
     parser.add_option("--volume", help="Check builds by volume ID")
     parser.add_option("--prefix", help="Only check packages starting with this prefix")
-    # TODO ignore options
+
+    # options for what to check
+    parser.add_option("--ignore-strays", action='store_true',
+                      help="Ignore stray files")
+    parser.add_option("--no-sums", action='store_true',
+                      help="Don't check checksums")
 
     opts, args = parser.parse_args()
 
@@ -121,7 +127,7 @@ def feeder_thread(opts, args):
             # avoid overloading the queue
             logger.debug('feeder waiting. queue is large')
             time.sleep(5)
-        checker = BuildChecker(build)
+        checker = BuildChecker(build, opts)
         queue.put([checker.check, {}])
         logger.debug("%i: queueing build %s", i, build['nvr'])
     logger.info('%i builds queued', i)
@@ -211,8 +217,9 @@ def worker_thread(opts):
 
 class BuildChecker(object):
 
-    def __init__(self, build):
+    def __init__(self, build, options):
         self.build = build
+        self.options = options
 
     def check(self):
         '''Initial build check, plus queue deeper checks'''
@@ -223,7 +230,7 @@ class BuildChecker(object):
             # ignore these
             return
         elif state in ('FAILED', 'DELETED', 'CANCELED'):
-            if not os.path.isdir(self.build_dir):
+            if not self.options.ignore_strays and not os.path.isdir(self.build_dir):
                 logger.warn('Stray build directory: %s (build is %s)',
                              self.build_dir, state)
             # don't check further for these
@@ -283,8 +290,8 @@ class BuildChecker(object):
                 logger.warn('Wrong sigmd5 for: %s', fn)
                 logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
         self.check_rpm_sigs()
-        queue.put([self.verify_rpms, {}])
-        # ^ separate task?
+        if not self.options.no_sums:
+            queue.put([self.verify_rpms, {}])
 
     def verify_rpms(self):
         '''Actually verify the embedded checksums'''
@@ -402,7 +409,8 @@ class BuildChecker(object):
             if st.st_size != archive['size']:
                 logger.warn('Wrong size for: %s', fn)
                 logger.warn('  db: %i, file: %i', archive['size'], st.st_size)
-        queue.put([self.verify_archives, {}])
+        if not self.options.no_sums:
+            queue.put([self.verify_archives, {}])
 
     def verify_archives(self):
         logger.debug('Checking %i archive checksums for %s', len(self.archives),

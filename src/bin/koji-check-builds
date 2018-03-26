@@ -242,7 +242,7 @@ class BuildChecker(object):
             # ignore these
             return
         elif state in ('FAILED', 'DELETED', 'CANCELED'):
-            if not self.options.ignore_strays and not os.path.isdir(self.build_dir):
+            if not self.options.ignore_strays and os.path.isdir(self.build_dir):
                 logger.warn('Stray build directory: %s (build is %s)',
                              self.build_dir, state)
             # don't check further for these

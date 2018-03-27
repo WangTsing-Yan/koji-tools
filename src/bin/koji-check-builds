@@ -100,6 +100,9 @@ def main():
     while mthread.isAlive():
         mthread.join(timeout=5)
 
+    # TODO: exit code?
+    # TODO: summary
+
 
 def monitor_thread(fthread, queue, threads):
     """Monitor the other threads"""
@@ -455,7 +458,6 @@ class BuildChecker(object):
         elif sumtype == 'sha1':
             chk = sha1_constructor()
         else:
-            # XXX
             logger.error('Unsupported sum type %s for %s', sumtype, fn)
             return
         logger.debug('Checking %s for %s', sumtype, fn)

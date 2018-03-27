@@ -193,11 +193,13 @@ class StatsTracker(object):
         # shouldn't need a lock here
         self.failed_builds[build_id] = 1
 
-    def report(self):
-        logger.info('Elapsed time: %i seconds', time.time() - self.start)
+    def report(self, fp=None):
+        if fp is None:
+            fp = sys.stdout
+        fp.write('Elapsed time: %i seconds\n' % (time.time() - self.start))
         for key in sorted(self.counters):
-            logger.info('%10i  %s', self.counters[key], key)
-        logger.info('%10i  failed builds', len(self.failed_builds))
+            fp.write('%13i  %s\n' % (self.counters[key], key))
+        fp.write('%13i  failed builds\n' % len(self.failed_builds))
 
 
 
@@ -206,7 +208,7 @@ stats = StatsTracker()
 
 def feeder_thread(opts, args):
     '''Fetch builds and feed them into the queu'''
-    for i, build in enumerate(get_builds(opts, args)):
+    for i, build in enumerate(get_builds(opts, args), start=1):
         while queue.qsize() > 1000:
             # avoid overloading the queue
             logger.debug('feeder waiting. queue is large')

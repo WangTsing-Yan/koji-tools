@@ -381,10 +381,11 @@ class BuildChecker(object):
                     continue
                 raise
             stats.increment('rpm.bytes', st.st_size)
-            if not self.options.ignore_rpm_size and st.st_size != rpminfo['size']:
+            db_size = int(rpminfo['size'])  # might be string
+            if not self.options.ignore_rpm_size and st.st_size != db_size:
                 logger.warn('Wrong size for: %s\n'
-                            '  db: %i, file: %i',
-                            fn, rpminfo['size'], st.st_size)
+                            '  db: %s, file: %s',
+                            fn, db_size, st.st_size)
                 self.fail('rpm.wrong_size')
             try:
                 hdr = koji.get_rpm_header(fn)
@@ -530,9 +531,11 @@ class BuildChecker(object):
                     self.fail('archive.missing')
                     continue
                 raise
-            if st.st_size != archive['size']:
-                logger.warn('Wrong size for: %s', fn)
-                logger.warn('  db: %i, file: %i', archive['size'], st.st_size)
+            db_size = int(archive['size'])  # might be string
+            if st.st_size != db_size:
+                logger.warn('Wrong size for: %s\n'
+                            '  db: %i, file: %i',
+                            fn, db_size, st.st_size)
                 self.fail('archive.wrong_size')
         if not self.options.no_sums:
             queue.put([self.verify_archives, {}])

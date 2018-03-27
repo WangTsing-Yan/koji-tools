@@ -146,6 +146,7 @@ class StatsTracker(object):
         self.master_lock = threading.Lock()
         self.locks = {}
         self.counters = {}
+        self.start = time.time()
 
     def get_lock(self, name):
         # first see if we have it
@@ -174,6 +175,7 @@ class StatsTracker(object):
                 self.counters[name] = delta
 
     def report(self):
+        logger.info('Elapsed time: %i seconds', time.time() - self.start)
         for key in sorted(self.counters):
             logger.info('%10i  %s', self.counters[key], key)
 
@@ -348,6 +350,7 @@ class BuildChecker(object):
                     stats.increment('rpms.missing')
                     continue
                 raise
+            stats.increment('rpms.bytes', st.st_size)
             if not self.options.ignore_rpm_size and st.st_size != rpminfo['size']:
                 logger.warn('Wrong size for: %s', fn)
                 logger.warn('  db: %i, file: %i', rpminfo['size'], st.st_size)

@@ -82,20 +82,25 @@ def main():
     # start our threads
     fthread = threading.Thread(name='feeder', target=feeder_thread,
                                args=(opts, args))
-    fthread.setDaemon(True)
+    fthread.daemon = True
     fthread.start()
 
     threads = []
     for i in range(opts.threads):
         wthread = threading.Thread(name='worker %i' % i, target=worker_thread,
                                    args=(opts,))
-        wthread.setDaemon(True)
+        wthread.daemon = True
         wthread.start()
         threads.append(wthread)
 
+    # input thread
+    ithread = threading.Thread(name='input', target=input_thread)
+    ithread.daemon = True
+    ithread.start()
+
     mthread = threading.Thread(name='monitor', target=monitor_thread,
-                               args=(fthread, queue, threads))
-    mthread.setDaemon(True)
+                               args=(fthread, ithread, threads))
+    mthread.daemon = True
     mthread.start()
     while mthread.isAlive():
         mthread.join(timeout=5)
@@ -105,7 +110,14 @@ def main():
     stats.report()
 
 
-def monitor_thread(fthread, queue, threads):
+def input_thread():
+    '''Show stats if user hits enter'''
+    while True:
+        raw_input()
+        stats.report()
+
+
+def monitor_thread(fthread, ithread, threads):
     """Monitor the other threads"""
     # this part is its own thread so that the main thread can handle ctrl-c
 
@@ -119,6 +131,7 @@ def monitor_thread(fthread, queue, threads):
     logger.info('Finished. Waiting for workers to stop.')
     for wthread in threads:
         wthread.join()
+    logger.info('Workers finished')
 
 
 sessions = threading.local()

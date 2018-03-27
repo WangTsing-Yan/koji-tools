@@ -102,6 +102,7 @@ def main():
 
     # TODO: exit code?
     # TODO: summary
+    stats.report()
 
 
 def monitor_thread(fthread, queue, threads):
@@ -139,6 +140,47 @@ def _get_session():
     return koji.ClientSession(koji.config.server, session_opts)
 
 
+class StatsTracker(object):
+
+    def __init__(self):
+        self.master_lock = threading.Lock()
+        self.locks = {}
+        self.counters = {}
+
+    def get_lock(self, name):
+        # first see if we have it
+        # optimizing for the default case -- usually we will have it
+        try:
+            return self.locks[name]
+        except KeyError:
+            pass
+
+        # otherwise try to create it
+        with self.master_lock:
+            # could have just been added
+            lock = self.locks.get(name)
+            if lock:
+                return lock
+            lock = threading.Lock()
+            self.locks[name] = lock
+            return lock
+
+    def increment(self, name, delta=1):
+        with self.get_lock(name):
+            # again, optimizing for the default case
+            try:
+                self.counters[name] += delta
+            except KeyError:
+                self.counters[name] = delta
+
+    def report(self):
+        for key in sorted(self.counters):
+            logger.info('%10i  %s', self.counters[key], key)
+
+
+stats = StatsTracker()
+
+
 def feeder_thread(opts, args):
     '''Fetch builds and feed them into the queu'''
     for i, build in enumerate(get_builds(opts, args)):
@@ -147,6 +189,7 @@ def feeder_thread(opts, args):
             logger.debug('feeder waiting. queue is large')
             time.sleep(5)
         checker = BuildChecker(build, opts)
+        stats.increment('build.queued')
         queue.put([checker.check, {}])
         logger.debug("%i: queueing build %s", i, build['nvr'])
     logger.info('%i builds queued', i)
@@ -295,27 +338,32 @@ class BuildChecker(object):
     def check_rpms(self):
         self.get_rpms()
         for rpminfo in self.rpms:
+            stats.increment('rpms.checked')
             fn = rpminfo['_fn']
             try:
                 st = os.stat(fn)
             except OSError as ex:
                 if ex.errno == 2:
                     logger.warn('Missing rpm: %s', fn)
+                    stats.increment('rpms.missing')
                     continue
                 raise
             if not self.options.ignore_rpm_size and st.st_size != rpminfo['size']:
                 logger.warn('Wrong size for: %s', fn)
                 logger.warn('  db: %i, file: %i', rpminfo['size'], st.st_size)
+                stats.increment('rpms.wrong_size')
             try:
                 hdr = koji.get_rpm_header(fn)
                 # ^NOTE: this call does not *verify*
             except Exception:
                 logger.warn('Unable to read header for: %s', fn)
+                stats.increment('rpms.bad_header')
                 continue
             sigmd5 = koji.hex_string(hdr[rpm.RPMTAG_SIGMD5])
             if rpminfo['payloadhash'] != sigmd5:
                 logger.warn('Wrong sigmd5 for: %s', fn)
                 logger.warn('  db: %s, file: %s', rpminfo['payloadhash'], sigmd5)
+                stats.increment('rpms.bad_hash')
         self.check_rpm_sigs()
         if not self.options.no_sums:
             queue.put([self.verify_rpms, {}])
@@ -335,8 +383,10 @@ class BuildChecker(object):
                 ts.hdrFromFdno(fp.fileno())
             except rpm.error as ex:
                 logger.warn('Could not verify rpm %s: %s', fn, ex)
+                stats.increment('rpms.failed_verify')
             except Exception as ex:
                 logger.exception("Error verifying rpm: %s", fn)
+                stats.increment('rpms.failed_verify')
 
     def check_rpm_sigs(self):
         '''Validate signature data on disc'''
@@ -358,15 +408,18 @@ class BuildChecker(object):
                 continue
             # else
             for rpminfo, sig in sig_idx[sigkey]:
+                stats.increment('sigcache.checked')
                 cachefile = os.path.join(self.build_dir, koji.pathinfo.sighdr(rpminfo, sigkey))
                 if not os.path.isfile(cachefile):
                     logger.warn("Cached signature missing: %s", cachefile)
+                    stats.increment('sigcache.missing')
                     continue
                 sighash = md5_constructor(file(cachefile).read()).hexdigest()
                 if sighash != sig['sighash']:
                     logger.warn('Cached signature mismatch for %s\n'
                             '  db: %s, file:%s',
                             cachefile, sig['sighash'], sighash)
+                    stats.increment('sigcache.mismatch')
         signed_to_check = []
         for sigkey in sig_idx:
             signeddir = os.path.join(self.build_dir, 'data/signed/%s' % sigkey)
@@ -380,7 +433,9 @@ class BuildChecker(object):
                     continue
                 signed_to_check.append(signed)
                 # check that sig header matches
+                stats.increment('sigheader.checked')
                 hdr = koji.rip_rpm_sighdr(signed)
+                stats.increment('sigheader.bytes', len(hdr))
                 sighash = md5_constructor(hdr).hexdigest()
                 if sighash != sig['sighash']:
                     logger.warn('Signed copy sighdr mismatch: %s\n'
@@ -392,6 +447,7 @@ class BuildChecker(object):
             logger.debug('Verifying %i signed copies for %s',
                     len(signed_to_check), self.build['nvr'])
             for fn in signed_to_check:
+                stats.increment('signed_copy.check')
                 self.verify_rpm(fn, ts)
 
     def check_archives(self):
@@ -408,6 +464,7 @@ class BuildChecker(object):
         logger.debug('Found %i archives for %s', len(archives), self.build['nvr'])
         self.archives = []
         for archive in archives.values():
+            stats.increment('archives.checked')
             if archive['btype'] == 'maven':
                 fn = '%s/%s' % (koji.pathinfo.mavenbuild(build),
                         koji.pathinfo.mavenfile(archive))
@@ -432,11 +489,13 @@ class BuildChecker(object):
             except OSError as ex:
                 if ex.errno == 2:
                     logger.warn('Missing archive: %s', fn)
+                    stats.increment('archives.missing')
                     continue
                 raise
             if st.st_size != archive['size']:
                 logger.warn('Wrong size for: %s', fn)
                 logger.warn('  db: %i, file: %i', archive['size'], st.st_size)
+                stats.increment('archives.wrong_size')
         if not self.options.no_sums:
             queue.put([self.verify_archives, {}])
 
@@ -461,14 +520,17 @@ class BuildChecker(object):
             logger.error('Unsupported sum type %s for %s', sumtype, fn)
             return
         logger.debug('Checking %s for %s', sumtype, fn)
+        stats.increment('checksums.checked')
         with file(fn, 'r') as fp:
             chunks = iter(partial(fp.read, 819200), b'')
             [chk.update(b) for b in chunks]
+            stats.increment('checksum.bytes', fp.tell())
         value = chk.hexdigest()
         if value != expect:
             logger.warn('Checksum mismatch (%s) for %s\n'
                     '  db: %s, file: %s',
                     sumtype, fn, expect, value)
+            stats.increment('checksums.bad')
 
 
 

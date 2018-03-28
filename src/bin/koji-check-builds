@@ -106,7 +106,8 @@ def main():
     ithread.daemon = True
     ithread.start()
 
-    mthread = Thread(name='monitor', target=monitor_thread,
+    # don't bother profiling this one
+    mthread = threading.Thread(name='monitor', target=monitor_thread,
                                args=(fthread, ithread, threads))
     mthread.daemon = True
     mthread.start()

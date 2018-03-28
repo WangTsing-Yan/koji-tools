@@ -382,6 +382,7 @@ class BuildChecker(object):
                 raise
             stats.increment('rpm.bytes', st.st_size)
             db_size = int(rpminfo['size'])  # might be string
+            rpminfo['_size'] = st.st_size
             if not self.options.ignore_rpm_size and st.st_size != db_size:
                 logger.warn('Wrong size for: %s\n'
                             '  db: %s, file: %s',
@@ -410,10 +411,12 @@ class BuildChecker(object):
         ts = rpm.TransactionSet()
         ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
         for rpminfo in self.rpms:
-            fn = rpminfo['_fn']
-            self.verify_rpm(fn, ts)
+            self.verify_rpm(ts, rpminfo)
 
-    def verify_rpm(self, fn, ts):
+    def verify_rpm(self, ts, rpminfo):
+        fn = rpminfo['_fn']
+        n_bytes = rpminfo['_size']
+        start = time.time()
         with open(fn, 'r') as fp:
             try:
                 ts.hdrFromFdno(fp.fileno())
@@ -423,6 +426,8 @@ class BuildChecker(object):
             except Exception as ex:
                 logger.exception("Error verifying rpm: %s", fn)
                 self.fail('rpm.failed_verify')
+        end = time.time()
+        logger.debug('Summed %.3f Mbytes/sec', (n_bytes/(end-start)/1024/1024))
 
     def check_rpm_sigs(self):
         '''Validate signature data on disc'''
@@ -562,10 +567,14 @@ class BuildChecker(object):
             return
         logger.debug('Checking %s for %s', sumtype, fn)
         stats.increment('checksum.checked')
+        start = time.time()
         with file(fn, 'r') as fp:
             chunks = iter(partial(fp.read, 819200), b'')
             [chk.update(b) for b in chunks]
-            stats.increment('checksum.bytes', fp.tell())
+            n_bytes = fp.tell()
+            stats.increment('checksum.bytes', n_bytes)
+        end = time.time()
+        logger.debug('Summed %.3f Mbytes/sec', (n_bytes/(end-start)/1024/1024))
         value = chk.hexdigest()
         if value != expect:
             logger.warn('Checksum mismatch (%s) for %s\n'

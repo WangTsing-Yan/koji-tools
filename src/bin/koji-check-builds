@@ -196,10 +196,16 @@ class StatsTracker(object):
     def report(self, fp=None):
         if fp is None:
             fp = sys.stdout
-        fp.write('Elapsed time: %i seconds\n' % (time.time() - self.start))
+        elapsed = time.time() - self.start
+        fp.write('Elapsed time: %i seconds\n' % elapsed)
+        n_bytes = 0
         for key in sorted(self.counters):
-            fp.write('%13i  %s\n' % (self.counters[key], key))
+            val = self.counters[key]
+            if key.endswith('.bytes'):
+                n_bytes += val
+            fp.write('%13i  %s\n' % (val, key))
         fp.write('%13i  failed builds\n' % len(self.failed_builds))
+        fp.write('Bytes throughput: %s\n' % format_bw(n_bytes, elapsed))
 
 
 
@@ -310,6 +316,12 @@ def worker_thread(opts):
         queue.task_done()
 
 
+def format_bw(n_bytes, seconds):
+    if seconds == 0:
+        return '??? Mbytes/sec'
+    return '%.3f Mbytes/sec' % (n_bytes/seconds/1024/1024)
+
+
 class BuildChecker(object):
 
     def __init__(self, build, options):
@@ -411,11 +423,11 @@ class BuildChecker(object):
         ts = rpm.TransactionSet()
         ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
         for rpminfo in self.rpms:
-            self.verify_rpm(ts, rpminfo)
+            fn = rpminfo['_fn']
+            self.verify_rpm(fn, ts, rpminfo['_size'])
 
-    def verify_rpm(self, ts, rpminfo):
-        fn = rpminfo['_fn']
-        n_bytes = rpminfo['_size']
+    def verify_rpm(self, fn, ts, n_bytes):
+        logger.debug('Verifying rpm %s', fn)
         start = time.time()
         with open(fn, 'r') as fp:
             try:
@@ -427,7 +439,8 @@ class BuildChecker(object):
                 logger.exception("Error verifying rpm: %s", fn)
                 self.fail('rpm.failed_verify')
         end = time.time()
-        logger.debug('Summed %.3f Mbytes/sec', (n_bytes/(end-start)/1024/1024))
+        logger.debug('RPM verify %i bytes at %s',
+                     n_bytes, format_bw(n_bytes, end-start))
 
     def check_rpm_sigs(self):
         '''Validate signature data on disc'''
@@ -490,8 +503,10 @@ class BuildChecker(object):
             logger.debug('Verifying %i signed copies for %s',
                     len(signed_to_check), self.build['nvr'])
             for fn in signed_to_check:
+                size = os.stat(fn).st_size
+                stats.increment('signed_copy.bytes', size)
                 stats.increment('signed_copy.check')
-                self.verify_rpm(fn, ts)
+                self.verify_rpm(fn, ts, size)
 
     def check_archives(self):
         build = self.build
@@ -574,7 +589,8 @@ class BuildChecker(object):
             n_bytes = fp.tell()
             stats.increment('checksum.bytes', n_bytes)
         end = time.time()
-        logger.debug('Summed %.3f Mbytes/sec', (n_bytes/(end-start)/1024/1024))
+        logger.debug('Summed %i bytes at %s',
+                     n_bytes, format_bw(n_bytes, end-start))
         value = chk.hexdigest()
         if value != expect:
             logger.warn('Checksum mismatch (%s) for %s\n'

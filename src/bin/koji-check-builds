@@ -210,9 +210,13 @@ class StatsTracker(object):
             except KeyError:
                 self.counters[name] = delta
 
-    def fail_build(self, build_id):
-        # shouldn't need a lock here
-        self.failed_builds[build_id] = 1
+    def fail_build(self, build, key):
+        with self.get_lock('_failed_builds'):
+            build_id = build['build_id']
+            if build_id in self.failed_builds:
+                return
+            self.failed_builds[build_id] = [build['nvr'], key]
+            logger.warn('Build check failed: %s (%s)', build['nvr'], key)
 
     def report(self, fp=None):
         if fp is None:
@@ -379,7 +383,7 @@ class BuildChecker(object):
         queue.put([self.check_files, {}])
 
     def fail(self, key=None):
-        stats.fail_build(self.build['build_id'])
+        stats.fail_build(self.build, key)
         if key:
             stats.increment(key)
 

@@ -1,13 +1,13 @@
 #!/usr/bin/python
 
-import Queue
+import Queue   # for exceptions
 import cProfile
 from functools import partial
 import logging
+import multiprocessing
 import optparse
 import os
 import sys
-import threading
 import time
 
 import dateutil
@@ -20,10 +20,10 @@ import rpm
 logger = logging.getLogger('koji.checkbuilds')
 
 # an event to indicate that the feeder thread is done
-feeder_done = threading.Event()
+feeder_done = multiprocessing.Event()
 
 # queue to hold actions in the pipeline
-queue = Queue.Queue()
+queue = multiprocessing.Queue()
 
 
 def main():
@@ -87,50 +87,58 @@ def main():
     else:
         top_logger.setLevel(logging.WARN)
 
-    Thread = threading.Thread
+    Process = multiprocessing.Process
     if opts.with_profiler:
-        Thread = ProfiledThread
+        Process = ProfiledProcess
 
     # start our threads
-    fthread = Thread(name='feeder', target=feeder_thread,
+    fthread = Process(name='feeder', target=feeder_thread,
                                args=(opts, args))
     fthread.daemon = True
     fthread.start()
 
     threads = []
     for i in range(opts.threads):
-        wthread = Thread(name='worker %i' % i, target=worker_thread,
+        wthread = Process(name='worker %i' % i, target=worker_thread,
                                    args=(opts,))
         wthread.daemon = True
         wthread.start()
         threads.append(wthread)
 
     # input thread
-    ithread = Thread(name='input', target=input_thread)
-    ithread.daemon = True
-    ithread.start()
+    # XXX fix this?
+    # ithread = Process(name='input', target=input_thread)
+    # ithread.daemon = True
+    # ithread.start()
 
-    # don't bother profiling this one
-    mthread = threading.Thread(name='monitor', target=monitor_thread,
-                               args=(fthread, ithread, threads))
-    mthread.daemon = True
-    mthread.start()
-    while mthread.isAlive():
-        mthread.join(timeout=5)
+    # the builds thread will be the first to finish
+    fthread.join()
+    feeder_done.set()
+
+    # wait for the queue to be empty
+    queue.close()
+    queue.join_thread()
+
+    assert queue.empty()
+
+    logger.info('Finished. Waiting for workers to stop.')
+    for wthread in threads:
+        wthread.join()
+    logger.info('Workers finished')
 
     stats.report()
     if stats.failed_builds:
         sys.exit(1)
 
 
-class ProfiledThread(threading.Thread):
+class ProfiledProcess(multiprocessing.Process):
 
-    profile_lock = threading.Lock()
+    profile_lock = multiprocessing.Lock()
 
     def run(self):
         profiler = cProfile.Profile()
         try:
-            return profiler.runcall(threading.Thread.run, self)
+            return profiler.runcall(multiprocessing.Process.run, self)
         finally:
             with self.profile_lock:
                 profiler.print_stats(sort='cumulative')
@@ -143,33 +151,17 @@ def input_thread():
         stats.report(sys.stderr)
 
 
-def monitor_thread(fthread, ithread, threads):
-    """Monitor the other threads"""
-    # this part is its own thread so that the main thread can handle ctrl-c
 
-    # the builds thread will be the first to finish
-    fthread.join()
-    feeder_done.set()
-
-    # wait for the queue to be empty
-    queue.join()
-
-    logger.info('Finished. Waiting for workers to stop.')
-    for wthread in threads:
-        wthread.join()
-    logger.info('Workers finished')
-
-
-sessions = threading.local()
+SESSION = None
 
 
 def get_session():
     '''Get session for this thread, create if needed'''
-    try:
-        return sessions.session
-    except AttributeError:
-        sessions.session = _get_session()
-        return sessions.session
+    global SESSION
+    # XXX refactor
+    if SESSION is None:
+        SESSION = _get_session()
+    return SESSION
 
 
 def _get_session():
@@ -182,7 +174,7 @@ def _get_session():
 class StatsTracker(object):
 
     def __init__(self):
-        self.master_lock = threading.Lock()
+        self.master_lock = multiprocessing.Lock()
         self.locks = {}
         self.counters = {}
         self.start = time.time()
@@ -202,7 +194,7 @@ class StatsTracker(object):
             lock = self.locks.get(name)
             if lock:
                 return lock
-            lock = threading.Lock()
+            lock = multiprocessing.Lock()
             self.locks[name] = lock
             return lock
 
@@ -252,11 +244,11 @@ def feeder_thread(opts, args):
             # avoid overloading the queue
             logger.debug('feeder waiting. queue is large')
             time.sleep(5)
-        checker = BuildChecker(build, opts)
         stats.increment('build.queued')
-        queue.put([checker.check, {}])
+        queue.put([build, opts])
         logger.debug("%i: queueing build %s", i, build['nvr'])
     logger.info('%i builds queued', i)
+    queue.close()
 
 
 def get_builds(options, args):
@@ -339,14 +331,14 @@ def worker_thread(opts):
     '''Handle tasks in queue'''
     while True:
         try:
-            func, kwargs = queue.get(block=True, timeout=5)
+            build, opts = queue.get(block=True, timeout=5)
         except Queue.Empty:
             if feeder_done.is_set():
                 # is this enough?
                 break
             continue
-        func(**kwargs)
-        queue.task_done()
+        checker = BuildChecker(build, opts)
+        checker.check()
 
 
 def format_bw(n_bytes, seconds):
@@ -384,7 +376,7 @@ class BuildChecker(object):
         else:
             # should not happen
             raise ValueError('Build state is %s' % state)
-        queue.put([self.check_files, {}])
+        self.check_files()
 
     def fail(self, key=None):
         stats.fail_build(self.build, key)
@@ -447,7 +439,7 @@ class BuildChecker(object):
                 self.fail('rpm.bad_hash')
         self.check_rpm_sigs()
         if not self.options.no_sums:
-            queue.put([self.verify_rpms, {}])
+            self.verify_rpms()
 
     def verify_rpms(self):
         '''Actually verify the embedded checksums'''
@@ -594,7 +586,7 @@ class BuildChecker(object):
                             fn, db_size, st.st_size)
                 self.fail('archive.wrong_size')
         if not self.options.no_sums:
-            queue.put([self.verify_archives, {}])
+            self.verify_archives()
 
     def verify_archives(self):
         logger.debug('Checking %i archive checksums for %s', len(self.archives),

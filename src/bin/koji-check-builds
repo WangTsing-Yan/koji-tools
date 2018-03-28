@@ -76,7 +76,7 @@ def main():
     top_logger = logging.getLogger("koji")
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging.DEBUG)
-    # handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
+    handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s'))
     top_logger.addHandler(handler)
     if opts.debug:
         top_logger.setLevel(logging.DEBUG)
@@ -140,7 +140,7 @@ def input_thread():
     '''Show stats if user hits enter'''
     while True:
         raw_input()
-        stats.report()
+        stats.report(sys.stderr)
 
 
 def monitor_thread(fthread, ithread, threads):

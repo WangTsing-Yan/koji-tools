@@ -8,6 +8,7 @@ import multiprocessing
 import optparse
 import os
 import sys
+import threading
 import time
 
 import dateutil
@@ -91,6 +92,12 @@ def main():
     if opts.with_profiler:
         Process = ProfiledProcess
 
+    tracker = StatsTracker()
+    # still a thread
+    s_thread = threading.Thread(name='stats', target=stats_thread, args=(tracker,))
+    s_thread.daemon = True
+    s_thread.start()
+
     # start feeder
     feeder = Process(name='feeder', target=feeder_main,
                                args=(opts, args))
@@ -107,10 +114,9 @@ def main():
         workers.append(worker)
 
     # input thread
-    # XXX fix this?
-    # ithread = Process(name='input', target=input_thread)
-    # ithread.daemon = True
-    # ithread.start()
+    i_thread = threading.Thread(name='input', target=input_thread, args=(tracker,))
+    i_thread.daemon = True
+    i_thread.start()
 
     # feeder will be the first to finish
     feeder.join()
@@ -127,8 +133,9 @@ def main():
         worker.join()
     logger.info('Workers finished')
 
-    stats.report()
-    if stats.failed_builds:
+    s_thread.join()
+    tracker.report()
+    if tracker.failed_builds:
         sys.exit(1)
 
 
@@ -145,11 +152,11 @@ class ProfiledProcess(multiprocessing.Process):
                 profiler.print_stats(sort='cumulative')
 
 
-def input_thread():
+def input_thread(tracker):
     '''Show stats if user hits enter'''
     while True:
-        raw_input()
-        stats.report(sys.stderr)
+        sys.stdin.readline()
+        tracker.report(sys.stderr)
 
 
 
@@ -170,6 +177,38 @@ def _get_session():
     session_opts = koji.grab_session_options(koji.config)
     session_opts['anon_retry'] = True
     return koji.ClientSession(koji.config.server, session_opts)
+
+
+# queue for stats
+stats_queue = multiprocessing.Queue()
+
+
+def stats_thread(tracker):
+    '''Handle stats queue'''
+    # this one remains a thread
+    while True:
+        try:
+            method, args, kw = stats_queue.get(block=True, timeout=5)
+        except Queue.Empty:
+            if feeder_done.is_set() and queue.empty():
+                # is this enough?
+                break
+            continue
+        # TODO sanity check method
+        handler = getattr(tracker, method)
+        handler(*args, **kw)
+
+
+class StatsProxy(object):
+
+    def increment(self, *args, **kw):
+        stats_queue.put(['increment', args, kw])
+
+    def fail_build(self, *args, **kw):
+        stats_queue.put(['fail_build', args, kw])
+
+
+stats = StatsProxy()
 
 
 class StatsTracker(object):
@@ -235,7 +274,6 @@ class StatsTracker(object):
 
 
 
-stats = StatsTracker()
 
 
 def feeder_main(opts, args):

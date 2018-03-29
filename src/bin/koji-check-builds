@@ -159,19 +159,6 @@ def input_thread(tracker):
         tracker.report(sys.stderr)
 
 
-
-SESSION = None
-
-
-def get_session():
-    '''Get session, create if needed'''
-    global SESSION
-    # XXX refactor
-    if SESSION is None:
-        SESSION = new_session()
-    return SESSION
-
-
 def new_session():
     '''Get a new anonymous session'''
     session_opts = koji.grab_session_options(koji.config)
@@ -194,7 +181,8 @@ def stats_thread(tracker):
                 # is this enough?
                 break
             continue
-        # TODO sanity check method
+        if method not in ('increment', 'fail_build'):
+            raise ValueError('Invalid stats method: %s' % method)
         handler = getattr(tracker, method)
         handler(*args, **kw)
 
@@ -273,11 +261,10 @@ class StatsTracker(object):
         fp.write('Bytes overall throughput: %s\n' % format_bw(n_bytes, elapsed))
 
 
-
-
-
 def feeder_main(opts, args):
     '''Fetch builds and feed them into the queu'''
+    global session
+    session = new_session()
     for i, build in enumerate(get_builds(opts, args), start=1):
         while queue.qsize() > 1000:
             # avoid overloading the queue
@@ -292,7 +279,6 @@ def feeder_main(opts, args):
 
 def get_builds(options, args):
     '''Yield all requested builds'''
-    session = new_session()
     if options.buildid:
         try:
             buildid = int(options.buildid)
@@ -368,6 +354,8 @@ def get_builds(options, args):
 
 def worker_main(opts):
     '''Handle tasks in queue'''
+    global session
+    session = new_session()
     while True:
         try:
             build, opts = queue.get(block=True, timeout=5)
@@ -428,7 +416,6 @@ class BuildChecker(object):
 
     def get_rpms(self):
         '''Get rpms to check'''
-        session = get_session()
         rpms = []
         for rpminfo in session.listRPMs(buildID=self.build['build_id']):
             fn = '%s/%s' % (self.build_dir, koji.pathinfo.rpm(rpminfo))
@@ -510,7 +497,6 @@ class BuildChecker(object):
     def check_rpm_sigs(self):
         '''Validate signature data on disc'''
         build = self.build
-        session = get_session()
         sig_idx = {}
         session.multicall = True
         for rpminfo in self.rpms:
@@ -577,7 +563,6 @@ class BuildChecker(object):
 
     def check_archives(self):
         build = self.build
-        session = get_session()
         # first gather archives
         archives = {}
         for legacy in ['maven', 'win', 'image']:

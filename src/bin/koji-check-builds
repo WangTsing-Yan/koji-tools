@@ -168,11 +168,11 @@ def get_session():
     global SESSION
     # XXX refactor
     if SESSION is None:
-        SESSION = _get_session()
+        SESSION = new_session()
     return SESSION
 
 
-def _get_session():
+def new_session():
     '''Get a new anonymous session'''
     session_opts = koji.grab_session_options(koji.config)
     session_opts['anon_retry'] = True
@@ -292,7 +292,7 @@ def feeder_main(opts, args):
 
 def get_builds(options, args):
     '''Yield all requested builds'''
-    session = get_session()
+    session = new_session()
     if options.buildid:
         try:
             buildid = int(options.buildid)

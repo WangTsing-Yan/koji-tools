@@ -495,6 +495,9 @@ class BuildChecker(object):
         ts = rpm.TransactionSet()
         ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
         for rpminfo in self.rpms:
+            if '_size' not in rpminfo:
+                # doesn't exist
+                continue
             fn = rpminfo['_fn']
             self.verify_rpm(fn, ts, rpminfo['_size'])
 

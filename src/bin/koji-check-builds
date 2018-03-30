@@ -364,8 +364,12 @@ def worker_main(opts):
                 # is this enough?
                 break
             continue
-        checker = BuildChecker(build, opts)
-        checker.check()
+        try:
+            checker = BuildChecker(build, opts)
+            checker.check()
+        except Exception:
+            stats.fail_build(build, 'unknown_error')
+
 
 
 def format_bw(n_bytes, seconds):

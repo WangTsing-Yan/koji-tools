@@ -402,7 +402,8 @@ class BuildChecker(object):
         self.options = options
 
     def check(self):
-        self.check_build()
+        if not self.check_build():
+            return
         self.check_rpms()
         self.check_rpm_sigs()
         if not self.options.no_sums:
@@ -419,19 +420,20 @@ class BuildChecker(object):
         self.build_dir = koji.pathinfo.build(build)
         if state == 'BUILDING':
             # ignore these
-            return
+            return False
         elif state in ('FAILED', 'DELETED', 'CANCELED'):
             if not self.options.ignore_strays and os.path.isdir(self.build_dir):
                 logger.warn('Stray build directory: %s (build is %s)',
                              self.build_dir, state)
                 self.fail('build.stray_dir')
             # don't check further for these
-            return
+            return False
         elif state == 'COMPLETE':
             if not os.path.isdir(self.build_dir):
                 logger.warn('Build directory missing: %s', self.build_dir)
                 self.fail('build.missing_dir')
-                return
+                return False
+            return True
         else:
             # should not happen
             raise ValueError('Build state is %s' % state)

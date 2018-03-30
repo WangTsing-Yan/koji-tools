@@ -56,6 +56,7 @@ def main():
     parser.add_option("--owner", help="Check builds built by this owner")
     parser.add_option("--volume", help="Check builds by volume ID")
     parser.add_option("--prefix", help="Only check packages starting with this prefix")
+    parser.add_option("--tag", help="Only builds in the given tag (with inheritance)")
 
     # options for what to check
     parser.add_option("--ignore-strays", action='store_true',
@@ -287,6 +288,10 @@ def get_builds(options, args):
         binfo = session.getBuild(buildid, strict=True)
         yield binfo
         return
+    if options.tag:
+        for binfo in get_tagged_builds(options, args):
+            yield binfo
+        return
     chunksize = 10000
     opts = {}
     opts['queryOpts'] = {'order': 'build.id', 'offset': 0, 'limit': chunksize}
@@ -350,6 +355,38 @@ def get_builds(options, args):
         opts['queryOpts']['offset'] += chunksize
         for build in chunk:
             yield build
+
+
+def get_tagged_builds(options, args):
+    opts = {'inherit': True}
+    opts['tag'] = options.tag
+    if options.type is not None:
+        opts['type'] = options.type
+    if options.package:
+        try:
+            opts['packageID'] = int(options.package)
+        except ValueError:
+            package = session.getPackageID(options.package)
+            if package is None:
+                raise ValueError('invalid package option')
+            opts['package'] = package
+    if options.owner:
+        try:
+            opts['userID'] = int(options.owner)
+        except ValueError:
+            user = session.getUser(options.owner)
+            if user is None:
+                raise ValueError("Invalid owner option")
+            opts['owner'] = user['id']
+    if options.volume:
+        raise ValueError('The --volume option is incompatible with --tag')
+    for opt in ('before', 'after'):
+        val = getattr(options, opt)
+        if not val:
+            continue
+        raise ValueError('The --%s option is incompatible with --tag' % opt)
+
+    return session.listTagged(**opts)
 
 
 def worker_main(opts):

@@ -395,10 +395,22 @@ def format_bw(n_bytes, seconds):
 class BuildChecker(object):
 
     def __init__(self, build, options):
+        stats.increment('build.started')
         self.build = build
         self.options = options
 
     def check(self):
+        self.check_build()
+        self.check_rpms()
+        self.check_rpm_sigs()
+        if not self.options.no_sums:
+            self.verify_rpms()
+        self.check_archives()
+        if not self.options.no_sums:
+            self.verify_archives()
+        stats.increment('build.done')
+
+    def check_build(self):
         '''Initial build check, plus queue deeper checks'''
         build = self.build
         state = koji.BUILD_STATES[build['state']]
@@ -421,16 +433,11 @@ class BuildChecker(object):
         else:
             # should not happen
             raise ValueError('Build state is %s' % state)
-        self.check_files()
 
     def fail(self, key=None):
         stats.fail_build(self.build, key)
         if key:
             stats.increment(key)
-
-    def check_files(self):
-        self.check_rpms()
-        self.check_archives()
 
     def get_rpms(self):
         '''Get rpms to check'''
@@ -481,9 +488,6 @@ class BuildChecker(object):
                             '  db: %s, file: %s',
                             fn, rpminfo['payloadhash'], sigmd5)
                 self.fail('rpm.bad_hash')
-        self.check_rpm_sigs()
-        if not self.options.no_sums:
-            self.verify_rpms()
 
     def verify_rpms(self):
         '''Actually verify the embedded checksums'''
@@ -627,8 +631,6 @@ class BuildChecker(object):
                             '  db: %i, file: %i',
                             fn, db_size, st.st_size)
                 self.fail('archive.wrong_size')
-        if not self.options.no_sums:
-            self.verify_archives()
 
     def verify_archives(self):
         logger.debug('Checking %i archive checksums for %s', len(self.archives),

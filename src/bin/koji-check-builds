@@ -164,6 +164,7 @@ def new_session():
     '''Get a new anonymous session'''
     session_opts = koji.grab_session_options(koji.config)
     session_opts['anon_retry'] = True
+    session_opts['offline_retry'] = True
     return koji.ClientSession(koji.config.server, session_opts)
 
 
@@ -384,6 +385,7 @@ def worker_main(opts):
             checker.check()
         except Exception:
             stats.fail_build(build, 'unknown_error')
+            logger.exception('Unexpected error')
 
 
 def format_bw(n_bytes, seconds):
@@ -619,7 +621,6 @@ class BuildChecker(object):
                     self.fail('archive.metadata_only_exists')
                 logger.debug('Skipping metadata-only archive: %s', fn)
                 continue
-            self.archives.append(archive)
             try:
                 st = os.stat(fn)
             except OSError as ex:
@@ -628,6 +629,7 @@ class BuildChecker(object):
                     self.fail('archive.missing')
                     continue
                 raise
+            self.archives.append(archive)
             db_size = int(archive['size'])  # might be string
             if st.st_size != db_size:
                 logger.warn('Wrong size for: %s\n'

@@ -203,45 +203,23 @@ stats = StatsProxy()
 class StatsTracker(object):
 
     def __init__(self):
-        self.master_lock = multiprocessing.Lock()
-        self.locks = {}
         self.counters = {}
         self.start = time.time()
         self.failed_builds = {}
 
-    def get_lock(self, name):
-        # first see if we have it
-        # optimizing for the default case -- usually we will have it
-        try:
-            return self.locks[name]
-        except KeyError:
-            pass
-
-        # otherwise try to create it
-        with self.master_lock:
-            # could have just been added
-            lock = self.locks.get(name)
-            if lock:
-                return lock
-            lock = multiprocessing.Lock()
-            self.locks[name] = lock
-            return lock
-
     def increment(self, name, delta=1):
-        with self.get_lock(name):
-            # again, optimizing for the default case
-            try:
-                self.counters[name] += delta
-            except KeyError:
-                self.counters[name] = delta
+        # optimizing for the default case
+        try:
+            self.counters[name] += delta
+        except KeyError:
+            self.counters[name] = delta
 
     def fail_build(self, build, key):
-        with self.get_lock('_failed_builds'):
-            build_id = build['build_id']
-            if build_id in self.failed_builds:
-                return
-            self.failed_builds[build_id] = [build['nvr'], key]
-            logger.warn('Build check failed: %s (%s)', build['nvr'], key)
+        build_id = build['build_id']
+        if build_id in self.failed_builds:
+            return
+        self.failed_builds[build_id] = [build['nvr'], key]
+        logger.warn('Build check failed: %s (%s)', build['nvr'], key)
 
     def report(self, fp=None):
         if fp is None:
@@ -406,7 +384,6 @@ def worker_main(opts):
             checker.check()
         except Exception:
             stats.fail_build(build, 'unknown_error')
-
 
 
 def format_bw(n_bytes, seconds):

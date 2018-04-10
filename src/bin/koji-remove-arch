@@ -1,0 +1,64 @@
+#!/usr/bin/python
+
+import optparse
+import os
+
+import koji
+
+from koji_cli.lib import activate_session
+
+
+def main():
+    global koji
+    global session
+    parser = optparse.OptionParser(usage='%prog [options] <arch> [<arch> ...]')
+    parser.add_option('-p', '--profile', default='koji', help='pick a profile')
+    parser.add_option('-n', '--test', action='store_true', default=False,
+                      help='test mode')
+    opts, args = parser.parse_args()
+
+    if not args:
+        parser.error('At least one arch is required')
+
+    koji = koji.get_profile_module(opts.profile)
+
+    for name in ('cert', 'serverca'):
+        value = os.path.expanduser(getattr(koji.config, name))
+        setattr(koji.config, name, value)
+
+    session_opts = koji.grab_session_options(koji.config)
+    session = koji.ClientSession(koji.config.server, session_opts)
+    activate_session(session, koji.config)
+
+    to_update = []
+    for tag in session.listTags():
+        new_arches = check_tag(tag, args)
+        if new_arches:
+            to_update.append([tag, new_arches])
+
+    print('Found %i tags to update' % len(to_update))
+    if opts.test:
+        print('TEST MODE - no changes will be made')
+    for tag, new_arches in sorted(to_update):
+        disp = "%s: %s -> %s" % (tag['name'], tag['arches'], new_arches)
+        if opts.test:
+            print("TEST MODE: %s" % disp)
+        else:
+            session.editTag2(tag['id'], arches=new_arches)
+            print(disp)
+
+
+def check_tag(tag, args):
+    if not tag['arches']:
+        return None
+    arches = tag['arches'].split()
+    rm_arches = set(args)
+    new_arches = [a for a in arches if a not in rm_arches]
+    if len(new_arches) < len(arches):
+        return ' '.join(new_arches)
+    else:
+        return None  # no change
+
+
+if __name__ == '__main__':
+    main()

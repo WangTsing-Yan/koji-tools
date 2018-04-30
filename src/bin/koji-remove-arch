@@ -28,12 +28,13 @@ def main():
 
     session_opts = koji.grab_session_options(koji.config)
     session = koji.ClientSession(koji.config.server, session_opts)
-    activate_session(session, koji.config)
+    if not opts.test:
+        activate_session(session, koji.config)
 
     to_update = []
     for tag in session.listTags():
         new_arches = check_tag(tag, args)
-        if new_arches:
+        if new_arches is not None:
             to_update.append([tag, new_arches])
 
     print('Found %i tags to update' % len(to_update))

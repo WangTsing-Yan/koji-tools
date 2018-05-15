@@ -13,6 +13,8 @@ import time
 
 import dateutil
 import koji as _koji  # koji declared using profile module in main()
+koji = _koji  # until main() replaces
+import koji.policy
 from koji.util import md5_constructor
 from koji.util import sha1_constructor
 import rpm
@@ -29,13 +31,16 @@ queue = multiprocessing.Queue()
 
 def main():
     global koji
-    parser = optparse.OptionParser(usage='%prog [options]')
+    global volume_policy
+    parser = optparse.OptionParser(usage='%prog [options] <policy_file>')
     parser.add_option('-p', '--profile', default='koji',
                       help='pick a profile')
     parser.add_option('-j', '--jobs', default=5, type='int',
                       help='worker count')
     parser.add_option('--with-profiler', action='store_true',
                       help='use python profiler')
+    parser.add_option('-n', '--test', action='store_true',
+                      help="don't actually change volumes")
 
     # verbosity options
     parser.add_option("-d", "--debug", action="store_true",
@@ -60,8 +65,12 @@ def main():
 
     opts, args = parser.parse_args()
 
-    if args:
-        parser.error('This command takes no arguments. See --help for options')
+    if not args:
+        parser.error('Please specify a policy file')
+    elif len(args) > 1:
+        parser.error('You can only specify one policy file')
+
+    volume_policy = get_policy(args[0])
 
     koji = _koji.get_profile_module(opts.profile)
 
@@ -128,6 +137,12 @@ def main():
     tracker.report()
     if tracker.failed_builds:
         sys.exit(1)
+
+
+def get_policy(filename):
+    alltests = [koji.policy.findSimpleTests([globals(), vars(koji.policy)])]
+    with open(filename) as fp:
+        return koji.policy.SimpleRuleSet(fp.readlines(), alltests)
 
 
 class ProfiledProcess(multiprocessing.Process):
@@ -387,289 +402,97 @@ def format_bw(n_bytes, seconds):
 class BuildHandler(object):
 
     def __init__(self, build, options):
-        stats.increment('build.started')
+        stats.increment('build.checked')
         self.build = build
         self.options = options
 
     def run(self):
-        self.get_volume()
-
-
-        if not self.check_build():
+        try:
+            newvol = self.check_policy()
+        except Exception:
+            logger.exception('Error in policy')
+            stats.increment('policy.error')
             return
-        self.check_rpms()
-        self.check_rpm_sigs()
-        if not self.options.no_sums:
-            self.verify_rpms()
-        self.check_archives()
-        if not self.options.no_sums:
-            self.verify_archives()
-        stats.increment('build.done')
+        self.set_volume(newvol)
 
-    def check_build(self):
-        '''Initial build check, plus queue deeper checks'''
-        build = self.build
-        state = koji.BUILD_STATES[build['state']]
-        self.build_dir = koji.pathinfo.build(build)
-        if state == 'BUILDING':
-            # ignore these
-            return False
-        elif state in ('FAILED', 'DELETED', 'CANCELED'):
-            if not self.options.ignore_strays and os.path.isdir(self.build_dir):
-                logger.warn('Stray build directory: %s (build is %s)',
-                             self.build_dir, state)
-                self.fail('build.stray_dir')
-            # don't check further for these
-            return False
-        elif state == 'COMPLETE':
-            if not os.path.isdir(self.build_dir):
-                logger.warn('Build directory missing: %s', self.build_dir)
-                self.fail('build.missing_dir')
-                return False
-            return True
+    def set_volume(self, newvol):
+        if newvol is None:
+            stats.increment('policy.nomatch')
+            return
+        if newvol == self.build['volume_name']:
+            stats.increment('policy.same_volume')
+            return
+        stats.increment('policy.volume_changed')
+        # TODO - actually change volume
+
+    def check_policy():
+        data = {
+                'build': self.build,
+                'package': self.build['name'],
+                'volume_name': self.build['volume_name'],
+                'source': self.build['source'],
+                'handler': self,
+                }
+        data = koji.util.LazyDict(data)
+        data.lazyset('rpms', self.get_rpms, ())
+        data.lazyset('archives', self.get_archives, ())
+        data.lazyset('buildroots', self.get_brs, ())
+        data.lazyset('cg_list', self.get_cgs, ())
+        data.lazyset('build_tags', self.get_build_tags, ())
+        data.lazyset('tags', self.get_tags, ())
+        result = volume_policy.apply(data)
+        if result is not None:
+            return result
         else:
-            # should not happen
-            raise ValueError('Build state is %s' % state)
-
-    def fail(self, key=None):
-        stats.fail_build(self.build, key)
-        if key:
-            stats.increment(key)
+            return options.default
 
     def get_rpms(self):
-        '''Get rpms to check'''
-        rpms = []
-        for rpminfo in session.listRPMs(buildID=self.build['build_id']):
-            fn = '%s/%s' % (self.build_dir, koji.pathinfo.rpm(rpminfo))
-            rpminfo['_fn'] = fn
-            if rpminfo['metadata_only']:
-                if os.path.lexists(fn):
-                    logger.warn('Metadata-only rpm is present: %s', fn)
-                    self.fail('rpm.metadata_only_exists')
-                logger.debug('Skipping metadata-only rpm: %s', fn)
-                continue
-            rpms.append(rpminfo)
-        self.rpms = rpms
-        return rpms
+        '''Get rpms for build'''
+        if not hasattr(self, '_rpms'):
+            self._rpms = session.listRPMs(buildID=self.build['build_id'])
+        return self._rpms
 
-    def check_rpms(self):
-        self.get_rpms()
-        for rpminfo in self.rpms:
-            stats.increment('rpm.checked')
-            fn = rpminfo['_fn']
-            try:
-                st = os.stat(fn)
-            except OSError as ex:
-                if ex.errno == 2:
-                    logger.warn('Missing rpm: %s', fn)
-                    self.fail('rpm.missing')
-                    continue
-                raise
-            db_size = int(rpminfo['size'])  # might be string
-            rpminfo['_size'] = st.st_size
-            if not self.options.ignore_rpm_size and st.st_size != db_size:
-                logger.warn('Wrong size for: %s\n'
-                            '  db: %s, file: %s',
-                            fn, db_size, st.st_size)
-                self.fail('rpm.wrong_size')
-            try:
-                hdr = koji.get_rpm_header(fn)
-                # ^NOTE: this call does not *verify*
-            except Exception:
-                logger.warn('Unable to read header for: %s', fn)
-                self.fail('rpm.bad_header')
-                continue
-            sigmd5 = koji.hex_string(hdr[rpm.RPMTAG_SIGMD5])
-            if rpminfo['payloadhash'] != sigmd5:
-                logger.warn('Wrong sigmd5 for: %s\n'
-                            '  db: %s, file: %s',
-                            fn, rpminfo['payloadhash'], sigmd5)
-                self.fail('rpm.bad_hash')
+    def get_archives(self):
+        if not hasattr(self, '_archives'):
+            self._archives = session.listArchives(buildID=self.build['build_id'])
+        return self._archives
 
-    def verify_rpms(self):
-        '''Actually verify the embedded checksums'''
-        # should we just combine this with the earlier header check?
-        ts = rpm.TransactionSet()
-        ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
-        for rpminfo in self.rpms:
-            if '_size' not in rpminfo:
-                # doesn't exist
-                continue
-            fn = rpminfo['_fn']
-            self.verify_rpm(fn, ts, rpminfo['_size'])
+    def get_brs(self):
+        """Determine content generators from policy data"""
+        if not hasattr(self, '_buildroots'):
+            rpm_brs = [r['buildroot_id'] for r in self.get_rpms()]
+            archive_brs = [a['buildroot_id'] for a in self.get_archives()]
+            self._buildroots = set(rpm_brs + archive_brs)
+        return self._buildroots
 
-    def verify_rpm(self, fn, ts, n_bytes):
-        logger.debug('Verifying rpm %s', fn)
-        start = time.time()
-        with open(fn, 'r') as fp:
-            try:
-                ts.hdrFromFdno(fp.fileno())
-            except rpm.error as ex:
-                logger.warn('Could not verify rpm %s: %s', fn, ex)
-                self.fail('rpm.failed_verify')
-            except Exception as ex:
-                logger.exception("Error verifying rpm: %s", fn)
-                self.fail('rpm.failed_verify')
-        elapsed = time.time() - start
-        stats.increment('rpm.bytes', n_bytes)
-        stats.increment('rpm.time', elapsed)
-        logger.debug('RPM verify %i bytes at %s',
-                     n_bytes, format_bw(n_bytes, elapsed))
+    def get_cgs(self):
+        if not hasattr(self, '_cgs'):
+            cgs = set()
+            for br_id in self.get_brs():
+                if br_id is None:
+                    cgs.add(None)
+                else:
+                    # TODO multicall
+                    cgs.add(session.getBuildroot(br_id, strict=True)['cg_name'])
+            self._cgs = cgs
+        return self._cgs
 
-    def check_rpm_sigs(self):
-        '''Validate signature data on disc'''
-        build = self.build
-        sig_idx = {}
-        session.multicall = True
-        for rpminfo in self.rpms:
-            session.queryRPMSigs(rpm_id=rpminfo['id'])
-        for rpminfo, [sigs] in zip(self.rpms, session.multiCall(strict=True)):
-            sigs = session.queryRPMSigs(rpm_id=rpminfo['id'])
-            for sig in sigs:
-                sig_idx.setdefault(sig['sigkey'], []).append([rpminfo, sig])
-        logger.debug('Keys for %s: %s', build['nvr'], sig_idx.keys())
-        for sigkey in sig_idx:
-            cachedir = os.path.join(self.build_dir, 'data/sigcache/%s' % sigkey)
-            if not os.path.isdir(cachedir):
-                logger.warning("Signature cache dir missing: %s", cachedir)
-                self.fail('sigcachedir.missing')
-                continue
-            # else
-            for rpminfo, sig in sig_idx[sigkey]:
-                stats.increment('sigcache.checked')
-                cachefile = os.path.join(self.build_dir, koji.pathinfo.sighdr(rpminfo, sigkey))
-                if not os.path.isfile(cachefile):
-                    logger.warn("Cached signature missing: %s", cachefile)
-                    self.fail('sigcache.missing')
-                    continue
-                sighash = md5_constructor(file(cachefile).read()).hexdigest()
-                if sighash != sig['sighash']:
-                    logger.warn('Cached signature mismatch for %s\n'
-                            '  db: %s, file:%s',
-                            cachefile, sig['sighash'], sighash)
-                    self.fail('sigcache.mismatch')
-        signed_to_check = []
-        for sigkey in sig_idx:
-            signeddir = os.path.join(self.build_dir, 'data/signed/%s' % sigkey)
-            if not os.path.isdir(signeddir):
-                # ok - signed copies are temporary
-                continue
-            for rpminfo, sig in sig_idx[sigkey]:
-                signed = os.path.join(self.build_dir, koji.pathinfo.signed(rpminfo, sigkey))
-                if not os.path.exists(signed):
-                    # still ok
-                    continue
-                signed_to_check.append(signed)
-                # check that sig header matches
-                stats.increment('sigheader.checked')
-                start = time.time()
-                hdr = koji.rip_rpm_sighdr(signed)
-                sighash = md5_constructor(hdr).hexdigest()
-                elapsed = time.time() - start
-                stats.increment('sigheader.bytes', len(hdr))
-                stats.increment('sigheader.time', elapsed)
-                if sighash != sig['sighash']:
-                    logger.warn('Signed copy sighdr mismatch: %s\n'
-                            '  db: %s, file: %s',
-                            signed, sig['sighash'], sighash)
-                    self.fail('signedcopy.mismatch')
-        if not self.options.no_sums:
-            ts = rpm.TransactionSet()
-            ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
-            logger.debug('Verifying %i signed copies for %s',
-                    len(signed_to_check), self.build['nvr'])
-            for fn in signed_to_check:
-                size = os.stat(fn).st_size
-                stats.increment('signed_copy.check')
-                self.verify_rpm(fn, ts, size)
+    def get_build_tags(self):
+        if not hasattr(self, '_build_tags'):
+            tags = set()
+            for br_id in self.get_brs():
+                if br_id is None:
+                    tags.add(None)
+                else:
+                    # TODO multicall
+                    tags.add(session.getBuildroot(br_id, strict=True)['tag_name'])
+            self._build_tags = tags
+        return self._build_tags
 
-    def check_archives(self):
-        build = self.build
-        # first gather archives
-        archives = {}
-        for legacy in ['maven', 'win', 'image']:
-            for archive in session.listArchives(buildID=build['build_id'], type=legacy):
-                archives.setdefault(archive['id'], archive)
-        for archive in session.listArchives(buildID=build['build_id']):
-            archives.setdefault(archive['id'], archive)
-
-        logger.debug('Found %i archives for %s', len(archives), self.build['nvr'])
-        self.archives = []
-        for archive in archives.values():
-            stats.increment('archive.checked')
-            if archive['btype'] == 'maven':
-                fn = '%s/%s' % (koji.pathinfo.mavenbuild(build),
-                        koji.pathinfo.mavenfile(archive))
-            elif archive['btype'] == 'win':
-                fn = '%s/%s' % (koji.pathinfo.winbuild(build),
-                        koji.pathinfo.winfile(archive))
-            elif archive['btype'] == 'image':
-                fn = '%s/%s' % (koji.pathinfo.imagebuild(build),
-                        archive['filename'])
-            else:
-                fn = '%s/%s' % (koji.pathinfo.typedir(build, archive['btype']),
-                        archive['filename'])
-            archive['_fn'] = fn
-            if archive['metadata_only']:
-                if os.path.lexists(fn):
-                    logger.warn('Metadata-only archive is present: %s', fn)
-                    self.fail('archive.metadata_only_exists')
-                logger.debug('Skipping metadata-only archive: %s', fn)
-                continue
-            try:
-                st = os.stat(fn)
-            except OSError as ex:
-                if ex.errno == 2:
-                    logger.warn('Missing archive: %s', fn)
-                    self.fail('archive.missing')
-                    continue
-                raise
-            self.archives.append(archive)
-            db_size = int(archive['size'])  # might be string
-            if st.st_size != db_size:
-                logger.warn('Wrong size for: %s\n'
-                            '  db: %i, file: %i',
-                            fn, db_size, st.st_size)
-                self.fail('archive.wrong_size')
-
-    def verify_archives(self):
-        logger.debug('Checking %i archive checksums for %s', len(self.archives),
-                self.build['nvr'])
-        for archive in self.archives:
-            self.verify_checksum(archive['_fn'], archive['checksum_type'],
-                    archive['checksum'])
-
-    def verify_checksum(self, fn, sumtype, expect):
-        try:
-            sumtype = koji.CHECKSUM_TYPES[sumtype]
-        except KeyError:
-            logger.error('Unknown sum type %s for %s', sumtype, fn)
-            return
-        if sumtype == 'md5':
-            chk = md5_constructor()
-        elif sumtype == 'sha1':
-            chk = sha1_constructor()
-        else:
-            logger.error('Unsupported sum type %s for %s', sumtype, fn)
-            return
-        logger.debug('Checking %s for %s', sumtype, fn)
-        stats.increment('checksum.checked')
-        start = time.time()
-        with file(fn, 'r') as fp:
-            chunks = iter(partial(fp.read, 819200), b'')
-            [chk.update(b) for b in chunks]
-            n_bytes = fp.tell()
-        elapsed = time.time() - start
-        stats.increment('checksum.bytes', n_bytes)
-        stats.increment('checksum.time', elapsed)
-        logger.debug('Summed %i bytes at %s',
-                     n_bytes, format_bw(n_bytes, elapsed))
-        value = chk.hexdigest()
-        if value != expect:
-            logger.warn('Checksum mismatch (%s) for %s\n'
-                    '  db: %s, file: %s',
-                    sumtype, fn, expect, value)
-            self.fail('checksum.bad')
+    def get_tags(self):
+        if not hasattr(self, '_tags'):
+            self._tags = session.listTags(build=self.build['build_id'])
+        return self._tags
 
 
 # Policy tests
@@ -681,49 +504,13 @@ class BuildHandler(object):
 class PackageTest(koji.policy.MatchTest):
     """Checks package against glob patterns"""
     name = 'package'
-    field = 'name'
+    field = 'package'
 
 
 class VolumeTest(koji.policy.MatchTest):
     """Checks volume against glob patterns"""
     name = 'package'
     field = 'volume_name'
-
-
-def policy_get_brs(data):
-    """Determine content generators from policy data"""
-
-    if '_buildroots' in data:
-        return data['_buildroots']
-    # otherwise
-    binfo = data
-    # TODO multicall
-    rpm_brs = [r['buildroot_id'] for r in session.listRPMs(buildID=binfo['id'])]
-    archive_brs = [a['buildroot_id'] for a in session.listArchives(buildID=binfo['id'])]
-    data['_buildroots'] = set(rpm_brs + archive_brs)
-    return data['_buildroots']
-
-
-def policy_get_cgs(data):
-    # otherwise try buildroot data
-    cgs = set()
-    for br_id in policy_get_brs(data):
-        if br_id is None:
-            cgs.add(None)
-        else:
-            # TODO multicall
-            cgs.add(session.getBuildroot(br_id, strict=True)['cg_name'])
-    return cgs
-
-
-def policy_get_build_tags(data):
-    tags = set()
-    for br_id in policy_get_brs(data):
-        if br_id is None:
-            tags.add(None)
-        else:
-            tags.add(session.getBuildroot(br_id, strict=True)['tag_name'])
-    return tags
 
 
 class CGMatchAnyTest(koji.policy.BaseSimpleTest):
@@ -737,7 +524,7 @@ class CGMatchAnyTest(koji.policy.BaseSimpleTest):
 
     def run(self, data):
         #we need to find the volume name from the base data
-        cgs = policy_get_cgs(data)
+        cgs = data['cg_list']
         patterns = self.str.split()[1:]
         for cg_name in cgs:
             if cg_name is None:
@@ -760,7 +547,7 @@ class CGMatchAllTest(koji.policy.BaseSimpleTest):
 
     def run(self, data):
         #we need to find the volume name from the base data
-        cgs = policy_get_cgs(data)
+        cgs = data['cg_list']
         if not cgs:
             return False
         patterns = self.str.split()[1:]
@@ -777,10 +564,7 @@ class HasTagTest(koji.policy.BaseSimpleTest):
     """Check to see if build (currently) has a given tag"""
     name = 'hastag'
     def run(self, data):
-        if 'build' not in data:
-            return False
-        # TODO cache
-        tags = session.listTags(build=data['build'])
+        tags = data['tags']
         # True if any of these tags match any of the patterns
         args = self.str.split()[1:]
         # TODO multi_fnmatch
@@ -801,7 +585,7 @@ class BuildTagTest(koji.policy.BaseSimpleTest):
     name = 'buildtag'
     def run(self, data):
         args = self.str.split()[1:]
-        for tagname in policy_get_build_tags(data):
+        for tagname in data['build_tags']:
             if tagname is None:
                 # content generator buildroots might not have tag info
                 continue
@@ -818,14 +602,11 @@ class ImportedTest(koji.policy.BaseSimpleTest):
     True if any of them lack a buildroot (strict)"""
     name = 'imported'
     def run(self, data):
-        # TODO cache
-        # TODO multicall
-        rpms = session.listRPMs(buildID=data['build'])
         #no test args
-        for rpminfo in rpms:
+        for rpminfo in data['rpms']:
             if rpminfo['buildroot_id'] is None:
                 return True
-        for archive in session.listArchives(buildID=data['build']):
+        for archive in data['archives']:
             if archive['buildroot_id'] is None:
                 return True
         #otherwise...

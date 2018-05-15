@@ -140,9 +140,9 @@ def main():
 
 
 def get_policy(filename):
-    alltests = [koji.policy.findSimpleTests([globals(), vars(koji.policy)])]
+    tests = koji.policy.findSimpleTests([globals(), vars(koji.policy)])
     with open(filename) as fp:
-        return koji.policy.SimpleRuleSet(fp.readlines(), alltests)
+        return koji.policy.SimpleRuleSet(fp.readlines(), tests)
 
 
 class ProfiledProcess(multiprocessing.Process):
@@ -425,7 +425,7 @@ class BuildHandler(object):
         stats.increment('policy.volume_changed')
         # TODO - actually change volume
 
-    def check_policy():
+    def check_policy(self):
         data = {
                 'build': self.build,
                 'package': self.build['name'],
@@ -660,4 +660,12 @@ class PolicyTest(koji.policy.BaseSimpleTest):
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception:
+        # TODO remove this
+        import traceback
+        import pdb
+        etype, e, tb = sys.exc_info()
+        traceback.print_exc()
+        pdb.post_mortem(tb)

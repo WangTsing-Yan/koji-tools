@@ -416,12 +416,15 @@ class BuildHandler(object):
 
     def set_volume(self, newvol):
         if newvol is None:
+            logger.debug('Build %s: no match', self.build['nvr'])
             stats.increment('policy.nomatch')
             return
         if newvol == 'skip':
+            logger.debug('Build %s: skipped', self.build['nvr'])
             stats.increment('policy.skipped')
             return
         if newvol == self.build['volume_name']:
+            logger.debug('Build %s: same volume', self.build['nvr'])
             stats.increment('policy.same_volume')
             return
         stats.increment('policy.volume_changed')
@@ -472,27 +475,46 @@ class BuildHandler(object):
             self._buildroots = set(rpm_brs + archive_brs)
         return self._buildroots
 
+    def get_brinfo(self):
+        """Get detailed buildroot info
+
+        Returns a list of buildroot infos
+        The list will include a None if any components lack buildroot info
+        """
+        if hasattr(self, '_brinfo'):
+            return self._brinfo
+        brs = self.get_brs()
+        result = []
+        session.multicall = True
+        for br_id in brs:
+            if br_id is None:
+                result.append(None)
+            else:
+                session.getBuildroot(br_id, strict=True)
+        for [brinfo] in session.multiCall(strict=True):
+            result.append(brinfo)
+        self._brinfo = result
+        return result
+
     def get_cgs(self):
         if not hasattr(self, '_cgs'):
             cgs = set()
-            for br_id in self.get_brs():
-                if br_id is None:
+            for brinfo in self.get_brinfo():
+                if brinfo is None:
                     cgs.add(None)
                 else:
-                    # TODO multicall
-                    cgs.add(session.getBuildroot(br_id, strict=True)['cg_name'])
+                    cgs.add(brinfo['cg_name'])
             self._cgs = cgs
         return self._cgs
 
     def get_build_tags(self):
         if not hasattr(self, '_build_tags'):
             tags = set()
-            for br_id in self.get_brs():
-                if br_id is None:
+            for brinfo in self.get_brinfo():
+                if brinfo is None:
                     tags.add(None)
                 else:
-                    # TODO multicall
-                    tags.add(session.getBuildroot(br_id, strict=True)['tag_name'])
+                    tags.add(brinfo['tag_name'])
             self._build_tags = tags
         return self._build_tags
 

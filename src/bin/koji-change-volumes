@@ -410,7 +410,7 @@ class BuildHandler(object):
             newvol = self.check_policy()
         except Exception:
             logger.exception('Error in policy')
-            stats.increment('policy.error')
+            stats.fail_build(self.build, 'policy_error')
             return
         self.set_volume(newvol)
 

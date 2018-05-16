@@ -432,6 +432,8 @@ class BuildHandler(object):
                 self.build['volume_name'], newvol)
         stats.increment('volume.%s' % newvol)
         # TODO - actually change volume
+        stats.increment('moved.bytes', self.get_size())
+        # TODO - moved.time stats
 
     def check_policy(self):
         data = {
@@ -466,6 +468,9 @@ class BuildHandler(object):
         if not hasattr(self, '_archives'):
             self._archives = session.listArchives(buildID=self.build['build_id'])
         return self._archives
+
+    def get_size(self):
+        return sum([c['size'] for c in self.get_rpms() + self.get_archives()])
 
     def get_brs(self):
         """Determine content generators from policy data"""

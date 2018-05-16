@@ -20,7 +20,7 @@ from koji.util import sha1_constructor
 import rpm
 
 
-logger = logging.getLogger('koji.checkbuilds')
+logger = logging.getLogger('koji.changevolumes')
 
 # an event to indicate that the feeder is done
 feeder_done = multiprocessing.Event()
@@ -225,7 +225,7 @@ class StatsTracker(object):
         if build_id in self.failed_builds:
             return
         self.failed_builds[build_id] = [build['nvr'], key]
-        logger.warn('Build check failed: %s (%s)', build['nvr'], key)
+        logger.warn('Action failed: %s (%s)', build['nvr'], key)
 
     def report(self, fp=None):
         if fp is None:
@@ -419,6 +419,9 @@ class BuildHandler(object):
         if newvol is None:
             stats.increment('policy.nomatch')
             return
+        if newvol == 'skip':
+            stats.increment('policy.skipped')
+            return
         if newvol == self.build['volume_name']:
             stats.increment('policy.same_volume')
             return
@@ -441,10 +444,6 @@ class BuildHandler(object):
         data.lazyset('build_tags', self.get_build_tags, ())
         data.lazyset('tags', self.get_tags, ())
         result = volume_policy.apply(data)
-        if result is not None:
-            return result
-        else:
-            return options.default
 
     def get_rpms(self):
         '''Get rpms for build'''
@@ -509,7 +508,7 @@ class PackageTest(koji.policy.MatchTest):
 
 class VolumeTest(koji.policy.MatchTest):
     """Checks volume against glob patterns"""
-    name = 'package'
+    name = 'volume'
     field = 'volume_name'
 
 
@@ -621,42 +620,6 @@ class SourceTest(koji.policy.MatchTest):
     """
     name = "source"
     field = 'source'
-
-
-class PolicyTest(koji.policy.BaseSimpleTest):
-    """Test named policy
-
-    The named policy must exist
-    Returns True is the policy results in an action of:
-        yes, true, allow
-    Otherwise returns False
-    (Also returns False if there are no matches in the policy)
-    Watch out for loops
-    """
-    name = 'policy'
-
-    def __init__(self, str):
-        super(PolicyTest, self).__init__(str)
-        self.depth = 0
-        # this is used to detect loops. Note that each test in a ruleset is
-        # a distinct instance of its test class. So this value is particular
-        # to a given appearance of a policy check in a ruleset.
-
-    def run(self, data):
-        args = self.str.split()[1:]
-        if self.depth != 0:
-            #LOOP!
-            raise koji.GenericError("encountered policy loop at %s" % self.str)
-        ruleset = context.policy.get(args[0])
-        if not ruleset:
-            raise koji.GenericError("no such policy: %s" % args[0])
-        self.depth += 1
-        result = ruleset.apply(data)
-        self.depth -= 1
-        if result is None:
-            return False
-        else:
-            return result.lower() in ('yes', 'true', 'allow')
 
 
 if __name__ == '__main__':

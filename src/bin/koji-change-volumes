@@ -2,6 +2,7 @@
 
 import Queue   # for exceptions
 import cProfile
+import fnmatch
 from functools import partial
 import logging
 import multiprocessing
@@ -15,9 +16,7 @@ import dateutil
 import koji as _koji  # koji declared using profile module in main()
 koji = _koji  # until main() replaces
 import koji.policy
-from koji.util import md5_constructor
-from koji.util import sha1_constructor
-import rpm
+from koji.util import multi_fnmatch
 
 
 logger = logging.getLogger('koji.changevolumes')
@@ -426,6 +425,9 @@ class BuildHandler(object):
             stats.increment('policy.same_volume')
             return
         stats.increment('policy.volume_changed')
+        logger.info('Build %s: %s -> %s', self.build['nvr'],
+                self.build['volume_name'], newvol)
+        stats.increment('volume.%s' % newvol)
         # TODO - actually change volume
 
     def check_policy(self):
@@ -433,7 +435,8 @@ class BuildHandler(object):
                 'build': self.build,
                 'package': self.build['name'],
                 'volume_name': self.build['volume_name'],
-                'source': self.build['source'],
+                'source': self.build['source'] or '',
+                # ^ XXX is '' ok in this case?
                 'handler': self,
                 }
         data = koji.util.LazyDict(data)
@@ -443,7 +446,12 @@ class BuildHandler(object):
         data.lazyset('cg_list', self.get_cgs, ())
         data.lazyset('build_tags', self.get_build_tags, ())
         data.lazyset('tags', self.get_tags, ())
-        result = volume_policy.apply(data)
+        try:
+            result = volume_policy.apply(data)
+        except Exception:
+            logger.error('policy data: %r', data)
+            raise
+        return result
 
     def get_rpms(self):
         '''Get rpms for build'''
@@ -510,6 +518,15 @@ class VolumeTest(koji.policy.MatchTest):
     """Checks volume against glob patterns"""
     name = 'volume'
     field = 'volume_name'
+
+
+class SourceTest(koji.policy.MatchTest):
+    """Match build source
+
+    True if build source matches any of the supplied patterns
+    """
+    name = 'source'
+    field = 'source'
 
 
 class CGMatchAnyTest(koji.policy.BaseSimpleTest):
@@ -610,16 +627,6 @@ class ImportedTest(koji.policy.BaseSimpleTest):
                 return True
         #otherwise...
         return False
-
-
-class SourceTest(koji.policy.MatchTest):
-    """Match build source
-
-    This is not the cleanest, since we have to crack open the task parameters
-    True if build source matches any of the supplied patterns
-    """
-    name = "source"
-    field = 'source'
 
 
 if __name__ == '__main__':

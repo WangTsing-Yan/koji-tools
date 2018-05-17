@@ -430,15 +430,21 @@ class BuildHandler(object):
         stats.increment('policy.volume_changed')
         logger.info('Build %s: %s -> %s', self.build['nvr'],
                 self.build['volume_name'], newvol)
-        stats.increment('volume.%s' % newvol)
+        stats.increment('volume.%s.builds_added' % newvol)
+        stats.increment('volume.%s.builds_removed' % self.build['volume_name'])
         # TODO - actually change volume
-        stats.increment('moved.bytes', self.get_size())
+        size = self.get_size()
+        stats.increment('moved.bytes', size)
+        stats.increment('volume.%s.bytes_added' % newvol, size)
+        stats.increment('volume.%s.bytes_removed' % self.build['volume_name'], size)
         # TODO - moved.time stats
 
     def check_policy(self):
         data = {
                 'build': self.build,
                 'package': self.build['name'],
+                'version': self.build['version'],
+                'release': self.build['release'],
                 'volume_name': self.build['volume_name'],
                 'source': self.build['source'] or '',
                 # ^ XXX is '' ok in this case?

@@ -464,7 +464,6 @@ class BuildHandler(object):
         stats.increment('moved.time', elapsed)
         stats.increment('volume.%s.bytes_added' % newvol, size)
         stats.increment('volume.%s.bytes_removed' % self.build['volume_name'], size)
-        # TODO - moved.time stats
 
     def check_use(self, newvol):
         """Check usage on target volume
@@ -717,12 +716,4 @@ class ImportedTest(koji.policy.BaseSimpleTest):
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except Exception:
-        # TODO remove this
-        import traceback
-        import pdb
-        etype, e, tb = sys.exc_info()
-        traceback.print_exc()
-        pdb.post_mortem(tb)
+    main()

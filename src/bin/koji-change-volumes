@@ -17,6 +17,7 @@ import koji as _koji  # koji declared using profile module in main()
 koji = _koji  # until main() replaces
 import koji.policy
 from koji.util import multi_fnmatch
+from koji_cli.lib import activate_session
 
 
 logger = logging.getLogger('koji.changevolumes')
@@ -112,16 +113,20 @@ def main():
     s_thread.start()
 
     # start feeder
+    subsession = get_subsession(session)
     feeder = Process(name='feeder', target=feeder_main,
-                               args=(opts, args, subsession(session)))
+                               args=(opts, args, subsession))
+    subsession._forget()  # so we don't log it out
     feeder.daemon = True
     feeder.start()
 
     # start workers
     workers = []
     for i in range(opts.jobs):
+        subsession = get_subsession(session)
         worker = Process(name='worker %i' % i, target=worker_main,
-                                   args=(opts, subsession(session)))
+                                   args=(opts, subsession))
+        subsession._forget()  # so we don't log it out
         worker.daemon = True
         worker.start()
         workers.append(worker)
@@ -152,7 +157,7 @@ def main():
         sys.exit(1)
 
 
-def subsession(session):
+def get_subsession(session):
     """Get a subsession if logged in, clone session if not"""
     if session.logged_in:
         return session.subsession()

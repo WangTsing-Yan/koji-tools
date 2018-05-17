@@ -73,6 +73,20 @@ def main():
 
     koji = _koji.get_profile_module(opts.profile)
 
+    for name in ('cert', 'serverca'):
+        value = os.path.expanduser(getattr(koji.config, name))
+        setattr(koji.config, name, value)
+
+    # we only use this main session to create subsessions for the workers
+    session_opts = koji.grab_session_options(koji.config)
+    session_opts['anon_retry'] = True
+    session_opts['offline_retry'] = True
+    session = koji.ClientSession(koji.config.server, session_opts)
+    if not opts.test:
+        activate_session(session, koji.config)
+
+    to_update = []
+
     top_logger = logging.getLogger("koji")
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging.DEBUG)
@@ -99,7 +113,7 @@ def main():
 
     # start feeder
     feeder = Process(name='feeder', target=feeder_main,
-                               args=(opts, args))
+                               args=(opts, args, subsession(session)))
     feeder.daemon = True
     feeder.start()
 
@@ -107,7 +121,7 @@ def main():
     workers = []
     for i in range(opts.jobs):
         worker = Process(name='worker %i' % i, target=worker_main,
-                                   args=(opts,))
+                                   args=(opts, subsession(session)))
         worker.daemon = True
         worker.start()
         workers.append(worker)
@@ -138,6 +152,14 @@ def main():
         sys.exit(1)
 
 
+def subsession(session):
+    """Get a subsession if logged in, clone session if not"""
+    if session.logged_in:
+        return session.subsession()
+    else:
+        return koji.ClientSession(session.baseurl, session.opts)
+
+
 def get_policy(filename):
     tests = koji.policy.findSimpleTests([globals(), vars(koji.policy)])
     with open(filename) as fp:
@@ -162,14 +184,6 @@ def input_thread(tracker):
     while True:
         sys.stdin.readline()
         tracker.report(sys.stderr)
-
-
-def new_session():
-    '''Get a new anonymous session'''
-    session_opts = koji.grab_session_options(koji.config)
-    session_opts['anon_retry'] = True
-    session_opts['offline_retry'] = True
-    return koji.ClientSession(koji.config.server, session_opts)
 
 
 # queue for stats
@@ -245,10 +259,10 @@ class StatsTracker(object):
         fp.write('Bytes overall throughput: %s\n' % format_bw(n_bytes, elapsed))
 
 
-def feeder_main(opts, args):
+def feeder_main(opts, args, subsession):
     '''Fetch builds and feed them into the queue'''
     global session
-    session = new_session()
+    session = subsession
     for i, build in enumerate(get_builds(opts, args), start=1):
         while queue.qsize() > 1000:
             # avoid overloading the queue
@@ -373,10 +387,10 @@ def get_tagged_builds(options, args):
     return session.listTagged(**opts)
 
 
-def worker_main(opts):
+def worker_main(opts, subsession):
     '''Handle tasks in queue'''
     global session
-    session = new_session()
+    session = subsession
     while True:
         try:
             build, opts = queue.get(block=True, timeout=5)

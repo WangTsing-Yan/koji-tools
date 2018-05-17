@@ -3,7 +3,6 @@
 import Queue   # for exceptions
 import cProfile
 import fnmatch
-from functools import partial
 import logging
 import multiprocessing
 import optparse
@@ -80,16 +79,6 @@ def main():
         value = os.path.expanduser(getattr(koji.config, name))
         setattr(koji.config, name, value)
 
-    # we only use this main session to create subsessions for the workers
-    session_opts = koji.grab_session_options(koji.config)
-    session_opts['anon_retry'] = True
-    session_opts['offline_retry'] = True
-    session = koji.ClientSession(koji.config.server, session_opts)
-    if not opts.test:
-        activate_session(session, koji.config)
-
-    to_update = []
-
     top_logger = logging.getLogger("koji")
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging.DEBUG)
@@ -115,20 +104,16 @@ def main():
     s_thread.start()
 
     # start feeder
-    subsession = get_subsession(session)
     feeder = Process(name='feeder', target=feeder_main,
-                               args=(opts, args, subsession))
-    subsession._forget()  # so we don't log it out
+                               args=(opts, args))
     feeder.daemon = True
     feeder.start()
 
     # start workers
     workers = []
     for i in range(opts.jobs):
-        subsession = get_subsession(session)
         worker = Process(name='worker %i' % i, target=worker_main,
-                                   args=(opts, subsession))
-        subsession._forget()  # so we don't log it out
+                                   args=(opts,))
         worker.daemon = True
         worker.start()
         workers.append(worker)
@@ -159,12 +144,12 @@ def main():
         sys.exit(1)
 
 
-def get_subsession(session):
+def get_session():
     """Get a subsession if logged in, clone session if not"""
-    if session.logged_in:
-        return session.subsession()
-    else:
-        return koji.ClientSession(session.baseurl, session.opts)
+    session_opts = koji.grab_session_options(koji.config)
+    session_opts['anon_retry'] = True
+    session_opts['offline_retry'] = True
+    return koji.ClientSession(koji.config.server, session_opts)
 
 
 def get_policy(filename):
@@ -266,10 +251,11 @@ class StatsTracker(object):
         fp.write('Bytes overall throughput: %s\n' % format_bw(n_bytes, elapsed))
 
 
-def feeder_main(opts, args, subsession):
+def feeder_main(opts, args):
     '''Fetch builds and feed them into the queue'''
     global session
-    session = subsession
+    session = get_session()
+
     for i, build in enumerate(get_builds(opts, args), start=1):
         while queue.qsize() > 1000:
             # avoid overloading the queue
@@ -394,10 +380,13 @@ def get_tagged_builds(options, args):
     return session.listTagged(**opts)
 
 
-def worker_main(opts, subsession):
+def worker_main(opts):
     '''Handle tasks in queue'''
     global session
-    session = subsession
+    session = get_session()
+    if not opts.test:
+        activate_session(session, koji.config)
+
     while True:
         try:
             build, opts = queue.get(block=True, timeout=5)
@@ -452,14 +441,27 @@ class BuildHandler(object):
         if not self.check_use(newvol):
             # check_use records the failure
             return
+
+        # change the volume
+        start = time.time()
+        try:
+            if False and not self.options.test:  # XXX
+                session.changeBuildVolume(self.build['build_id'], newvol)
+        except Exception:
+            logger.exception('Move failed: %(nvr)s', self.build)
+            stats.fail_build(self.build, 'move_failed')
+            return
+
+        # record stats
+        elapsed = time.time() - start
+        size = self.get_size()
         stats.increment('policy.volume_changed')
         logger.info('Build %s: %s -> %s', self.build['nvr'],
                 self.build['volume_name'], newvol)
         stats.increment('volume.%s.builds_added' % newvol)
         stats.increment('volume.%s.builds_removed' % self.build['volume_name'])
-        # TODO - actually change volume
-        size = self.get_size()
         stats.increment('moved.bytes', size)
+        stats.increment('moved.time', elapsed)
         stats.increment('volume.%s.bytes_added' % newvol, size)
         stats.increment('volume.%s.bytes_removed' % self.build['volume_name'], size)
         # TODO - moved.time stats
@@ -619,7 +621,7 @@ class CGMatchAnyTest(koji.policy.BaseSimpleTest):
     name = 'cg_match_any'
 
     def run(self, data):
-        #we need to find the volume name from the base data
+        # we need to find the volume name from the base data
         cgs = data['cg_list']
         patterns = self.str.split()[1:]
         for cg_name in cgs:
@@ -642,7 +644,7 @@ class CGMatchAllTest(koji.policy.BaseSimpleTest):
     name = 'cg_match_all'
 
     def run(self, data):
-        #we need to find the volume name from the base data
+        # we need to find the volume name from the base data
         cgs = data['cg_list']
         if not cgs:
             return False
@@ -658,17 +660,18 @@ class CGMatchAllTest(koji.policy.BaseSimpleTest):
 
 class HasTagTest(koji.policy.BaseSimpleTest):
     """Check to see if build (currently) has a given tag"""
+
     name = 'hastag'
+
     def run(self, data):
         tags = data['tags']
         # True if any of these tags match any of the patterns
         args = self.str.split()[1:]
-        # TODO multi_fnmatch
         for tag in tags:
             for pattern in args:
                 if fnmatch.fnmatch(tag['name'], pattern):
                     return True
-        #otherwise...
+        # otherwise...
         return False
 
 
@@ -678,7 +681,9 @@ class BuildTagTest(koji.policy.BaseSimpleTest):
     If build_tag is not provided in policy data, it is determined by the
     buildroots of the component rpms
     """
+
     name = 'buildtag'
+
     def run(self, data):
         args = self.str.split()[1:]
         for tagname in data['build_tags']:
@@ -687,7 +692,7 @@ class BuildTagTest(koji.policy.BaseSimpleTest):
                 continue
             if multi_fnmatch(tagname, args):
                 return True
-        #otherwise...
+        # otherwise...
         return False
 
 
@@ -696,16 +701,18 @@ class ImportedTest(koji.policy.BaseSimpleTest):
 
     This is determined by checking the buildroots of the rpms and archives
     True if any of them lack a buildroot (strict)"""
+
     name = 'imported'
+
     def run(self, data):
-        #no test args
+        # no test args
         for rpminfo in data['rpms']:
             if rpminfo['buildroot_id'] is None:
                 return True
         for archive in data['archives']:
             if archive['buildroot_id'] is None:
                 return True
-        #otherwise...
+        # otherwise...
         return False
 
 

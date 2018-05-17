@@ -41,6 +41,8 @@ def main():
                       help='use python profiler')
     parser.add_option('-n', '--test', action='store_true',
                       help="don't actually change volumes")
+    parser.add_option('--max-use', type='int', metavar='PERCENT',
+                      help='skip move if target volume use reaches PERCENT')
 
     # verbosity options
     parser.add_option("-d", "--debug", action="store_true",
@@ -447,6 +449,9 @@ class BuildHandler(object):
             logger.debug('Build %s: same volume', self.build['nvr'])
             stats.increment('policy.same_volume')
             return
+        if not self.check_use(newvol):
+            # check_use records the failure
+            return
         stats.increment('policy.volume_changed')
         logger.info('Build %s: %s -> %s', self.build['nvr'],
                 self.build['volume_name'], newvol)
@@ -458,6 +463,28 @@ class BuildHandler(object):
         stats.increment('volume.%s.bytes_added' % newvol, size)
         stats.increment('volume.%s.bytes_removed' % self.build['volume_name'], size)
         # TODO - moved.time stats
+
+    def check_use(self, newvol):
+        """Check usage on target volume
+
+        Returns True if we can proceed with the move
+        """
+
+        if not self.options.max_use:
+            # check not enabled
+            return True
+        path = '%s/packages' % koji.pathinfo.volumedir(newvol)
+        if not os.path.exists(path):
+            logger.error("No such directory: %s", path)
+            stats.fail_build(self.build, 'volume_missing')
+            return False
+        fs_stat = os.statvfs(path)
+        avail = fs_stat.f_bavail * fs_stat.f_bsize
+        total = fs_stat.f_blocks * fs_stat.f_bsize
+        if 100.0 * (total - avail) / total > self.options.max_use:
+            stats.fail_build(self.build, 'volume_max_use')
+            return False
+        return True
 
     def check_policy(self):
         data = {

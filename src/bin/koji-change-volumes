@@ -71,6 +71,10 @@ def main():
     elif len(args) > 1:
         parser.error('You can only specify one policy file')
 
+    if not opts.test:
+        sys.stderr.write('Running without --test -- builds will be moved\n')
+        time.sleep(5)
+
     volume_policy = get_policy(args[0])
 
     koji = _koji.get_profile_module(opts.profile)
@@ -129,7 +133,7 @@ def main():
 
     # wait for the queue to be empty
     queue.close()
-    queue.join_thread()  # XXX is this right?
+    queue.join_thread()
 
     assert queue.empty()
 
@@ -445,7 +449,7 @@ class BuildHandler(object):
         # change the volume
         start = time.time()
         try:
-            if False and not self.options.test:  # XXX
+            if not self.options.test:
                 session.changeBuildVolume(self.build['build_id'], newvol)
         except Exception:
             logger.exception('Move failed: %(nvr)s', self.build)
@@ -494,8 +498,7 @@ class BuildHandler(object):
                 'version': self.build['version'],
                 'release': self.build['release'],
                 'volume_name': self.build['volume_name'],
-                'source': self.build['source'] or '',
-                # ^ XXX is '' ok in this case?
+                'source': self.build['source'] or 'NOSOURCE',
                 'handler': self,
                 }
         data = koji.util.LazyDict(data)

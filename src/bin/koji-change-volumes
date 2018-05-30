@@ -527,7 +527,7 @@ class BuildHandler(object):
         return self._archives
 
     def get_size(self):
-        return sum([c['size'] for c in self.get_rpms() + self.get_archives()])
+        return sum([int(c['size']) for c in self.get_rpms() + self.get_archives()])
 
     def get_brs(self):
         """Determine content generators from policy data"""

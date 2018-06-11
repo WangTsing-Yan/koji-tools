@@ -21,11 +21,13 @@ from koji_cli.lib import activate_session
 
 logger = logging.getLogger('koji.changevolumes')
 
-# an event to indicate that the feeder is done
+# events to indicate various completions
 feeder_done = multiprocessing.Event()
+workers_done = multiprocessing.Event()
 
-# queue to hold actions in the pipeline
-queue = multiprocessing.Queue()
+# queues for builds to consider and moves to process
+build_queue = multiprocessing.Queue()
+move_queue = multiprocessing.Queue()
 
 
 def main():
@@ -122,6 +124,15 @@ def main():
         worker.start()
         workers.append(worker)
 
+    # start movers
+    movers = []
+    for i in range(opts.jobs):
+        mover = Process(name='mover %i' % i, target=mover_main,
+                                   args=(opts,))
+        mover.daemon = True
+        mover.start()
+        movers.append(mover)
+
     # input thread
     i_thread = threading.Thread(name='input', target=input_thread, args=(tracker,))
     i_thread.daemon = True
@@ -131,16 +142,27 @@ def main():
     feeder.join()
     feeder_done.set()
 
-    # wait for the queue to be empty
-    queue.close()
-    queue.join_thread()
+    # all the work is in subprocesses, so we just wait
+    # the order of waiting matters
+    build_queue.close()
+    build_queue.join_thread()
+    assert build_queue.empty()
 
-    assert queue.empty()
-
-    logger.info('Finished. Waiting for workers to stop.')
+    logger.info('Waiting for workers to stop.')
     for worker in workers:
         worker.join()
     logger.info('Workers finished')
+    workers_done.set()
+
+    logger.info('Waiting for move queue to clear')
+    move_queue.close()
+    move_queue.join_thread()
+    assert move_queue.empty()
+
+    logger.info('Waiting for movers to stop')
+    for mover in movers:
+        mover.join()
+    logger.info('Movers finished')
 
     s_thread.join()
     tracker.report()
@@ -193,7 +215,7 @@ def stats_thread(tracker):
         try:
             method, args, kw = stats_queue.get(block=True, timeout=5)
         except Queue.Empty:
-            if feeder_done.is_set() and queue.empty():
+            if workers_done.is_set() and move_queue.empty():
                 # is this enough?
                 break
             continue
@@ -256,20 +278,20 @@ class StatsTracker(object):
 
 
 def feeder_main(opts, args):
-    '''Fetch builds and feed them into the queue'''
+    '''Fetch builds and feed them into the build queue'''
     global session
     session = get_session()
 
     for i, build in enumerate(get_builds(opts, args), start=1):
-        while queue.qsize() > 1000:
+        while build_queue.qsize() > 1000:
             # avoid overloading the queue
-            logger.debug('feeder waiting. queue is large')
+            logger.debug('feeder waiting. build queue is large')
             time.sleep(5)
         stats.increment('build.queued')
-        queue.put([build, opts])
+        build_queue.put([build, opts])
         logger.debug("%i: queueing build %s", i, build['nvr'])
     logger.info('%i builds queued', i)
-    queue.close()
+    build_queue.close()
 
 
 def get_builds(options, args):
@@ -385,7 +407,7 @@ def get_tagged_builds(options, args):
 
 
 def worker_main(opts):
-    '''Handle tasks in queue'''
+    '''Handle builds in queue'''
     global session
     session = get_session()
     if not opts.test:
@@ -393,7 +415,7 @@ def worker_main(opts):
 
     while True:
         try:
-            build, opts = queue.get(block=True, timeout=5)
+            build, opts = build_queue.get(block=True, timeout=5)
         except Queue.Empty:
             if feeder_done.is_set():
                 # is this enough?
@@ -402,6 +424,28 @@ def worker_main(opts):
         try:
             checker = BuildHandler(build, opts)
             checker.run()
+        except Exception:
+            stats.fail_build(build, 'unknown_error')
+            logger.exception('Unexpected error')
+
+
+def mover_main(opts):
+    '''Handle moves in queue'''
+    global session
+    session = get_session()
+    if not opts.test:
+        activate_session(session, koji.config)
+
+    while True:
+        try:
+            build, volume, opts = move_queue.get(block=True, timeout=5)
+        except Queue.Empty:
+            if workers_done.is_set():
+                break
+            continue
+        try:
+            mover = MoveHandler(build, volume, opts)
+            mover.run()
         except Exception:
             stats.fail_build(build, 'unknown_error')
             logger.exception('Unexpected error')
@@ -442,54 +486,10 @@ class BuildHandler(object):
             logger.debug('Build %s: same volume', self.build['nvr'])
             stats.increment('policy.same_volume')
             return
-        if not self.check_use(newvol):
-            # check_use records the failure
-            return
 
-        # change the volume
-        start = time.time()
-        try:
-            if not self.options.test:
-                session.changeBuildVolume(self.build['build_id'], newvol)
-        except Exception:
-            logger.exception('Move failed: %(nvr)s', self.build)
-            stats.fail_build(self.build, 'move_failed')
-            return
-
-        # record stats
-        elapsed = time.time() - start
+        # queue up the move
         size = self.get_size()
-        stats.increment('policy.volume_changed')
-        logger.info('Build %s: %s -> %s', self.build['nvr'],
-                self.build['volume_name'], newvol)
-        stats.increment('volume.%s.builds_added' % newvol)
-        stats.increment('volume.%s.builds_removed' % self.build['volume_name'])
-        stats.increment('moved.bytes', size)
-        stats.increment('moved.time', elapsed)
-        stats.increment('volume.%s.bytes_added' % newvol, size)
-        stats.increment('volume.%s.bytes_removed' % self.build['volume_name'], size)
-
-    def check_use(self, newvol):
-        """Check usage on target volume
-
-        Returns True if we can proceed with the move
-        """
-
-        if not self.options.max_use:
-            # check not enabled
-            return True
-        path = '%s/packages' % koji.pathinfo.volumedir(newvol)
-        if not os.path.exists(path):
-            logger.error("No such directory: %s", path)
-            stats.fail_build(self.build, 'volume_missing')
-            return False
-        fs_stat = os.statvfs(path)
-        avail = fs_stat.f_bavail * fs_stat.f_bsize
-        total = fs_stat.f_blocks * fs_stat.f_bsize
-        if 100.0 * (total - avail) / total > self.options.max_use:
-            stats.fail_build(self.build, 'volume_max_use')
-            return False
-        return True
+        move_queue.put([self.build, newvol, size])
 
     def check_policy(self):
         data = {
@@ -584,6 +584,74 @@ class BuildHandler(object):
         if not hasattr(self, '_tags'):
             self._tags = session.listTags(build=self.build['build_id'])
         return self._tags
+
+
+class MoveHandler(object):
+
+    def __init__(self, build, volume, size, options):
+        self.build = build
+        self.volume = volume
+        self.size = size
+        self.options = options
+
+    def run(self):
+        try:
+            self.do_move()
+        except Exception:
+            logger.exception('Error changing volumes')
+            stats.fail_build(self.build, 'move_error')
+            return
+
+    def do_move(self):
+        newvol = self.volume
+        if not self.check_use(newvol):
+            # check_use records the failure
+            return
+
+        # change the volume
+        start = time.time()
+        try:
+            if not self.options.test:
+                session.changeBuildVolume(self.build['build_id'], newvol)
+        except Exception:
+            logger.exception('Move failed: %(nvr)s', self.build)
+            stats.fail_build(self.build, 'move_failed')
+            return
+
+        # record stats
+        elapsed = time.time() - start
+        size = self.size
+        stats.increment('policy.volume_changed')
+        logger.info('Build %s: %s -> %s', self.build['nvr'],
+                self.build['volume_name'], newvol)
+        stats.increment('volume.%s.builds_added' % newvol)
+        stats.increment('volume.%s.builds_removed' % self.build['volume_name'])
+        stats.increment('moved.bytes', size)
+        stats.increment('moved.time', elapsed)
+        stats.increment('volume.%s.bytes_added' % newvol, size)
+        stats.increment('volume.%s.bytes_removed' % self.build['volume_name'], size)
+
+    def check_use(self, newvol):
+        """Check usage on target volume
+
+        Returns True if we can proceed with the move
+        """
+
+        if not self.options.max_use:
+            # check not enabled
+            return True
+        path = '%s/packages' % koji.pathinfo.volumedir(newvol)
+        if not os.path.exists(path):
+            logger.error("No such directory: %s", path)
+            stats.fail_build(self.build, 'volume_missing')
+            return False
+        fs_stat = os.statvfs(path)
+        avail = fs_stat.f_bavail * fs_stat.f_bsize
+        total = fs_stat.f_blocks * fs_stat.f_bsize
+        if 100.0 * (total - avail) / total > self.options.max_use:
+            stats.fail_build(self.build, 'volume_max_use')
+            return False
+        return True
 
 
 # Policy tests

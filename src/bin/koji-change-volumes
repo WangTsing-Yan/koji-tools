@@ -438,13 +438,13 @@ def mover_main(opts):
 
     while True:
         try:
-            build, volume, opts = move_queue.get(block=True, timeout=5)
+            build, volume, size = move_queue.get(block=True, timeout=5)
         except Queue.Empty:
             if workers_done.is_set():
                 break
             continue
         try:
-            mover = MoveHandler(build, volume, opts)
+            mover = MoveHandler(build, volume, size, opts)
             mover.run()
         except Exception:
             stats.fail_build(build, 'unknown_error')
@@ -488,6 +488,12 @@ class BuildHandler(object):
             return
 
         # queue up the move
+        while move_queue.qsize() > 1000:
+            # avoid overloading the queue
+            logger.debug('worker waiting. move queue is large')
+            time.sleep(5)
+        stats.increment('move.queued')
+        logger.debug("queueing move of %s to %s", self.build['nvr'], newvol)
         size = self.get_size()
         move_queue.put([self.build, newvol, size])
 

@@ -514,6 +514,7 @@ class BuildHandler(object):
         data.lazyset('cg_list', self.get_cgs, ())
         data.lazyset('build_tags', self.get_build_tags, ())
         data.lazyset('tags', self.get_tags, ())
+        data.lazyset('btype', self.get_btype, ())
         try:
             result = volume_policy.apply(data)
         except Exception:
@@ -590,6 +591,11 @@ class BuildHandler(object):
         if not hasattr(self, '_tags'):
             self._tags = session.listTags(build=self.build['build_id'])
         return self._tags
+
+    def get_btype(self):
+        if not hasattr(self, '_btype'):
+            self._btype = session.getBuildType(self.build['build_id'])
+        return self._btype
 
 
 class MoveHandler(object):
@@ -732,6 +738,24 @@ class CGMatchAllTest(koji.policy.BaseSimpleTest):
                 return False
         # else
         return True
+
+
+class BtypeTest(koji.policy.BaseSimpleTest):
+    """Checks for btype
+
+    Note: builds can have multiple btypes. This check returns true of *any* of
+          the btypes match
+    """
+
+    name = 'btype'
+
+    def run(self, data):
+        patterns = self.str.split()[1:]
+        for btype in data['btype']:
+            if multi_fnmatch(btype, patterns):
+                return True
+        # else
+        return False
 
 
 class HasTagTest(koji.policy.BaseSimpleTest):

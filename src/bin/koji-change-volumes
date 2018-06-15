@@ -43,7 +43,7 @@ def main():
     parser.add_option('-n', '--test', action='store_true',
                       help="don't actually change volumes")
     parser.add_option('--max-use', type='int', metavar='PERCENT',
-                      help='skip move if target volume use reaches PERCENT')
+                      help='skip move if target volume use reaches PERCENT (requires volume to be available locally)')
 
     # verbosity options
     parser.add_option("-d", "--debug", action="store_true",

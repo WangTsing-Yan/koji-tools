@@ -8,6 +8,8 @@ Supplementary tools and utilities for the Koji build system
 * `koji-builds-in-common` - Compare builds between multiple tags. Report
   builds and packages in common.
 
+* `koji-cancel-broken-builds` - Cancel "running" builds without any tasks.
+
 * `koji-change-volumes` - Move builds to volumes according to a policy
 
 * `koji-check-builds` - Run various sanity-checks on builds stored

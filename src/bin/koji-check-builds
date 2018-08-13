@@ -75,6 +75,10 @@ def main():
 
     koji = _koji.get_profile_module(opts.profile)
 
+    for name in ('cert', 'serverca'):
+        value = os.path.expanduser(getattr(koji.config, name))
+        setattr(koji.config, name, value)
+
     top_logger = logging.getLogger("koji")
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging.DEBUG)
@@ -404,6 +408,7 @@ class BuildChecker(object):
     def check(self):
         if not self.check_build():
             return
+        self.check_symlink()
         self.check_rpms()
         self.check_rpm_sigs()
         if not self.options.no_sums:
@@ -437,6 +442,29 @@ class BuildChecker(object):
         else:
             # should not happen
             raise ValueError('Build state is %s' % state)
+
+    def check_symlink(self):
+        if self.build['volume_name'] == 'DEFAULT':
+            # no symlink to check
+            return
+        base_binfo = self.build.copy()
+        base_binfo['volume_id'] = 0
+        base_binfo['volume_name'] = 'DEFAULT'
+        basedir = koji.pathinfo.build(base_binfo)
+
+        relpath = os.path.relpath(self.build_dir, os.path.dirname(basedir))
+        if os.path.islink(basedir):
+            actual = os.readlink(basedir)
+            if actual != relpath:
+                logger.warn('Wrong volume symlink: %s -> %s', basedir, actual)
+                self.fail('vol_symlink.wrong')
+        elif os.path.exists(basedir):
+            # exists, but not a symlink
+            logger.warn('Unexpected base volume content: %s', basedir)
+            self.fail('vol_symlink.not_a_link')
+        else:
+            logger.warn('Missing volume symlink: %s', basedir)
+            self.fail('vol_symlink.missing')
 
     def fail(self, key=None):
         stats.fail_build(self.build, key)

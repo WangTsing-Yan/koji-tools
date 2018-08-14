@@ -15,7 +15,6 @@ import time
 import dateutil
 import koji as _koji  # koji declared using profile module in main()
 koji = _koji  # until main() replaces
-from koji_cli.lib import activate_session
 
 
 logger = logging.getLogger('koji.fixsymlinks`')
@@ -395,8 +394,6 @@ def worker_main(opts):
     '''Handle builds in queue'''
     global session
     session = get_session()
-    if not opts.test:
-        activate_session(session, koji.config)
 
     while True:
         try:
@@ -469,6 +466,7 @@ class BuildHandler(object):
             self.fail('vol_symlink.not_a_link')
         else:
             stats.increment('build.link_missing')
+            self.ensuredir(os.path.dirname(basedir))
 
         if self.options.test:
             logger.warn('Would have fixed symlink: %s -> %s', basedir, relpath)
@@ -477,6 +475,34 @@ class BuildHandler(object):
         os.symlink(relpath, basedir)
         if self.options.uid != -1 or self.options.gid != -1:
             os.lchown(basedir, self.options.uid, self.options.gid)
+
+    def ensuredir(self, directory):
+        """Mostly same as koji lib function, but honors our options"""
+        if os.path.exists(directory):
+            if not os.path.isdir(directory):
+                raise OSError("Not a directory: %s" % directory)
+        else:
+            head, tail = os.path.split(directory)
+            if not tail and head == directory:
+                # can only happen if directory == '/' or equivalent
+                # (which obviously should not happen)
+                raise OSError("root directory missing? %s" % directory)
+            if head:
+                self.ensuredir(head)
+            # note: if head is blank, then we've reached the top of a relative path
+            if self.options.test:
+                logger.info('Would have created directory: %s', directory)
+                return
+            try:
+                os.mkdir(directory)
+            except OSError:
+                #thrown when dir already exists (could happen in a race)
+                if not os.path.isdir(directory):
+                    #something else must have gone wrong
+                    raise
+            if self.options.uid != -1 or self.options.gid != -1:
+                os.lchown(directory, self.options.uid, self.options.gid)
+        return directory
 
 
 if __name__ == '__main__':

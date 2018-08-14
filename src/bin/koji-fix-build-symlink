@@ -2,10 +2,12 @@
 
 import Queue   # for exceptions
 import cProfile
+import grp
 import logging
 import multiprocessing
 import optparse
 import os
+import pwd
 import sys
 import threading
 import time
@@ -37,6 +39,10 @@ def main():
                       help='use python profiler')
     parser.add_option('-n', '--test', action='store_true',
                       help="don't actually change volumes")
+    parser.add_option('--uid', default=-1,
+                      help="set symlink owner to uid")
+    parser.add_option('--gid', default=-1,
+                      help="set symlink group to gid")
 
     # verbosity options
     parser.add_option("-d", "--debug", action="store_true",
@@ -64,6 +70,20 @@ def main():
 
     if args:
         parser.error('This script takes no arguments')
+
+    for opt in 'uid', 'gid':
+        val = getattr(opts, opt)
+        if val == -1:
+            continue
+        if os.getuid():
+            parser.error('Setting uid/gid requires root')
+        if val.isdigit():
+            setattr(opts, opt, int(val))
+
+    if not isinstance(opts.uid, int):
+        opts.uid = pwd.getpwnam(opts.uid).pw_uid
+    if not isinstance(opts.gid, int):
+        opts.gid = grp.getgrnam(opts.gid).gr_gid
 
     if not opts.test:
         sys.stderr.write('Running without --test -- changes will be made\n')
@@ -457,9 +477,10 @@ class BuildHandler(object):
         if self.options.test:
             logger.warn('Would have fixed symlink: %s -> %s', basedir, relpath)
             return
-        # TODO uid, gid
         logger.warn('Fixing volume symlink: %s -> %s', basedir, relpath)
         os.symlink(relpath, basedir)
+        if self.options.uid != -1 or self.options.gid != -1:
+            os.lchown(basedir, self.options.uid, self.options.gid)
 
 
 if __name__ == '__main__':

@@ -248,18 +248,10 @@ class StatsTracker(object):
             fp = sys.stdout
         elapsed = time.time() - self.start
         fp.write('Elapsed time: %i seconds\n' % elapsed)
-        n_bytes = 0
-        b_time = 0
         for key in sorted(self.counters):
             val = self.counters[key]
-            if key.endswith('.bytes'):
-                n_bytes += val
-            elif key.endswith('.time'):
-                b_time += val
             fp.write('%13i  %s\n' % (val, key))
         fp.write('%13i  failed builds\n' % len(self.failed_builds))
-        fp.write('Bytes average throughput: %s\n' % format_bw(n_bytes, b_time))
-        fp.write('Bytes overall throughput: %s\n' % format_bw(n_bytes, elapsed))
 
 
 def feeder_main(opts, args):
@@ -445,7 +437,7 @@ class BuildHandler(object):
 
     def fix_symlink(self):
         if self.build['volume_name'] == 'DEFAULT':
-            # no symlink needed
+            stats.increment('build.default_volume')
             return
 
         build_dir = koji.pathinfo.build(self.build)
@@ -465,14 +457,18 @@ class BuildHandler(object):
             actual = os.readlink(basedir)
             if actual == relpath:
                 # we're good
+                stats.increment('build.link_ok')
                 return
             logger.warn('Wrong volume symlink: %s -> %s', basedir, actual)
+            stats.increment('build.wrong_link')
             if not self.options.test:
                 os.unlink(basedir)
         elif os.path.exists(basedir):
             # exists, but not a symlink
             logger.warn('Unexpected base volume content: %s', basedir)
             self.fail('vol_symlink.not_a_link')
+        else:
+            stats.increment('build.link_missing')
 
         if self.options.test:
             logger.warn('Would have fixed symlink: %s -> %s', basedir, relpath)

@@ -81,6 +81,9 @@ def get_new_hosts(o_idx, n_idx):
         for channel in host['channels']:
             changes.append(['addHostToChannel', [name, channel['name']], {}])
             # TODO: option to create channel
+        # new host entry will be enabled by default
+        if not host['enabled']:
+            changes.append(['disableHost', [name], {}])
     return changes
 
 
@@ -104,6 +107,12 @@ def get_host_updates(o_idx, n_idx):
             changes.append(['addHostToChannel', [name, chan], {}])
         for chan in ochan - nchan:
             changes.append(['removeHostFromChannel', [name, chan], {}])
+        # new host entry will be enabled by default
+        if host['enabled'] != orig['enabled']:
+            if host['enabled']:
+                changes.append(['enableHost', [name], {}])
+            else:
+                changes.append(['disableHost', [name], {}])
 
     return changes
 

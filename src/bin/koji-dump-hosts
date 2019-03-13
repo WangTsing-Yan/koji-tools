@@ -6,6 +6,7 @@ import os
 import sys
 
 import koji
+from koji_cli.lib import _
 
 
 def main():
@@ -14,6 +15,11 @@ def main():
     parser = optparse.OptionParser(usage='%prog [options]')
     parser.add_option('-p', '--profile', default='koji', help='pick a profile')
     parser.add_option('-o', '--outfile', help='write data to file')
+    parser.add_option("--arch", action="append", default=[], help=_("Specify an architecture"))
+    parser.add_option("--channel", help=_("Specify a channel"))
+    parser.add_option("--enabled", action="store_true", help=_("Limit to enabled hosts"))
+    parser.add_option("--not-enabled", action="store_false", dest="enabled", help=_("Limit to not enabled hosts"))
+
     opts, args = parser.parse_args()
 
     if args:
@@ -28,7 +34,7 @@ def main():
     session_opts = koji.grab_session_options(koji.config)
     session = koji.ClientSession(koji.config.server, session_opts)
 
-    data = get_host_data()
+    data = get_host_data(opts)
     if opts.outfile:
         with open(opts.outfile, 'w') as fp:
             json.dump(data, fp, indent=4)
@@ -36,8 +42,17 @@ def main():
         json.dump(data, sys.stdout, indent=4)
 
 
-def get_host_data():
-    hosts = session.listHosts()
+def get_host_data(options):
+    opts = {}
+    if options.arch:
+        opts['arches'] = options.arch
+    if options.channel:
+        channel = session.getChannel(options.channel, strict=True)
+        opts['channelID'] = channel['id']
+    if options.enabled is not None:
+        opts['enabled'] = options.enabled
+
+    hosts = session.listHosts(**opts)
 
     # also fetch channels
     session.multicall = True

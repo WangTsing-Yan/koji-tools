@@ -1,0 +1,138 @@
+#!/usr/bin/python
+
+import json
+import optparse
+import os
+import sys
+
+import koji
+from koji.util import dslice
+from koji_cli.lib import activate_session
+
+
+def main():
+    global koji
+    global session
+    parser = optparse.OptionParser(usage='%prog [options]')
+    parser.add_option('-p', '--profile', default='koji', help='pick a profile')
+    parser.add_option('-i', '--infile', help='read data from file')
+    parser.add_option('-n', '--test', action='store_true', default=False,
+                      help='test mode')
+    opts, args = parser.parse_args()
+
+    if args:
+        parser.error('Unexpected argument')
+
+    koji = koji.get_profile_module(opts.profile)
+
+    for name in ('cert', 'serverca'):
+        value = os.path.expanduser(getattr(koji.config, name))
+        setattr(koji.config, name, value)
+
+    session_opts = koji.grab_session_options(koji.config)
+    session = koji.ClientSession(koji.config.server, session_opts)
+
+    if not opts.test:
+        activate_session(session, koji.config)
+
+    data = read_host_data(opts)
+    print("Read %i host entries" % len(data))
+
+    changes = compare_hosts(data)
+
+    if opts.test:
+        print_changes(changes)
+    else:
+        do_changes(changes)
+
+
+def read_host_data(opts):
+    if opts.infile:
+        with open(opts.infile, 'r') as fp:
+            return json.load(fp)
+    else:
+        return json.load(sys.stdin)
+
+
+def compare_hosts(data):
+    old_data = get_host_data()
+    changes = []
+    o_idx = dict([[h['name'], h] for h in old_data])
+    n_idx = dict([[h['name'], h] for h in data])
+
+    changes_new = get_new_hosts(o_idx, n_idx)
+    changes_update = get_host_updates(o_idx, n_idx)
+
+    return changes_new + changes_update
+
+
+def get_new_hosts(o_idx, n_idx):
+    added = set(n_idx) - set(o_idx)
+    changes = []
+    for name in added:
+        host = n_idx[name]
+        # fields we care about: arches, capacity, description, comment, enabled
+        #  channels
+        archlist = host['arches'].split()
+        changes.append(['addHost', [name, archlist], {}])
+        # unfortunately, addHost cannot set all the fields we need to
+        edits = dslice(host, ['capacity', 'description', 'comment'])
+        changes.append(['editHost', [name], edits])
+        for channel in host['channels']:
+            changes.append(['addHostToChannel', [name, channel['name']], {}])
+            # TODO: option to create channel
+    return changes
+
+
+def get_host_updates(o_idx, n_idx):
+    common = set(n_idx) & set(o_idx)
+    changes = []
+    for name in common:
+        host = n_idx[name]
+        orig = o_idx[name]
+        # fields we care about: arches, capacity, description, comment, enabled
+        #  channels
+        edits = {}
+        for key in 'arches', 'capacity', 'description', 'comment':
+            if host[key] != orig[key]:
+                edits[key] = host[key]
+        if edits:
+            changes.append(['editHost', [name], edits])
+        ochan = set([c['name'] for c in orig['channels']])
+        nchan = set([c['name'] for c in host['channels']])
+        for chan in nchan - ochan:
+            changes.append(['addHostToChannel', [name, chan], {}])
+        for chan in ochan - nchan:
+            changes.append(['removeHostFromChannel', [name, chan], {}])
+
+    return changes
+
+
+def print_changes(changes):
+    import pprint
+    pprint.pprint(changes)
+    # TODO: better output
+
+
+def do_changes(changes):
+    session.multicall = True
+    for method, args, kw in changes:
+        session.callMethod(method, *args, **kw)
+    session.multiCall(strict=True)
+
+
+def get_host_data():
+    hosts = session.listHosts()
+
+    # also fetch channels
+    session.multicall = True
+    for host in hosts:
+        session.listChannels(hostID=host['id'])
+    for host, [channels] in zip(hosts, session.multiCall(strict=True)):
+        host['channels'] = channels
+
+    return hosts
+
+
+if __name__ == '__main__':
+    main()

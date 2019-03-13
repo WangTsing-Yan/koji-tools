@@ -1,0 +1,53 @@
+#!/usr/bin/python
+
+import json
+import optparse
+import os
+import sys
+
+import koji
+
+
+def main():
+    global koji
+    global session
+    parser = optparse.OptionParser(usage='%prog [options]')
+    parser.add_option('-p', '--profile', default='koji', help='pick a profile')
+    parser.add_option('-o', '--outfile', help='write data to file')
+    opts, args = parser.parse_args()
+
+    if args:
+        parser.error('Unexpected argument')
+
+    koji = koji.get_profile_module(opts.profile)
+
+    for name in ('cert', 'serverca'):
+        value = os.path.expanduser(getattr(koji.config, name))
+        setattr(koji.config, name, value)
+
+    session_opts = koji.grab_session_options(koji.config)
+    session = koji.ClientSession(koji.config.server, session_opts)
+
+    data = get_host_data()
+    if opts.outfile:
+        with open(opts.outfile, 'w') as fp:
+            json.dump(data, fp, indent=4)
+    else:
+        json.dump(data, sys.stdout, indent=4)
+
+
+def get_host_data():
+    hosts = session.listHosts()
+
+    # also fetch channels
+    session.multicall = True
+    for host in hosts:
+        session.listChannels(hostID=host['id'])
+    for host, [channels] in zip(hosts, session.multiCall(strict=True)):
+        host['channels'] = channels
+
+    return hosts
+
+
+if __name__ == '__main__':
+    main()

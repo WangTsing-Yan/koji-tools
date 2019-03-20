@@ -559,7 +559,6 @@ class BuildChecker(object):
         for rpminfo in self.rpms:
             session.queryRPMSigs(rpm_id=rpminfo['id'])
         for rpminfo, [sigs] in zip(self.rpms, session.multiCall(strict=True)):
-            sigs = session.queryRPMSigs(rpm_id=rpminfo['id'])
             for sig in sigs:
                 sig_idx.setdefault(sig['sigkey'], []).append([rpminfo, sig])
         logger.debug('Keys for %s: %s', build['nvr'], sig_idx.keys())

@@ -51,3 +51,7 @@ Supplementary tools and utilities for the Koji build system
 * `koji-tag-overlap` - Show package overlaps for a set of tags
 
 * `kojitop` - Show the tasks each builder is working on
+
+* `koji-dump-hosts` - Write current host data to a file
+
+* `koji-restore-hosts` - Restore host data from a file

@@ -48,6 +48,8 @@ Supplementary tools and utilities for the Koji build system
 * `koji-show-tag-space` - Show the disk space statistics for builds in a
   tag
 
+* `koji-ssl-admin` - Generates various SSL certificates
+
 * `koji-tag-overlap` - Show package overlaps for a set of tags
 
 * `kojitop` - Show the tasks each builder is working on

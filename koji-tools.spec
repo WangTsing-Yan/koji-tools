@@ -11,6 +11,7 @@ BuildArch:  noarch
 
 BuildRequires:  python-devel
 Requires: koji
+Requires: openssl
 
 %description
 provides a collection of tools/utilities that interacts

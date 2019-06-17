@@ -5,6 +5,7 @@ from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import errno
 import os
+import subprocess
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -12,6 +13,11 @@ from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.x509.oid import ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import hashes
+try:
+    # pkcs12 support is only available in python-cryptography 2.5+
+    from cryptography.hazmat.primitives.serialization import pkcs12
+except ImportError:
+    pkcs12 = None
 
 
 DESCRIPTION = """
@@ -38,8 +44,11 @@ Common Koji SSL admin operations:
    Like "master CA" above, you only need this if you don't have an external CA
    in your environment. (For example, in a testing environment.)
    You can use this to sign server certs or user certs with your CA.
+   For user certs, if you have the private key in the same directory, this
+   will also generate a "user_browser_cert.p12" bundle for your browser to log
+   into Kojiweb.
 
-Never share the .key files or post them in a public location.
+Never share the .key or .p12 files or post them in a public location.
 """
 
 
@@ -294,6 +303,47 @@ def sign_with_ca(csr_path, ca_key_path, ca_crt_path, crt_path, force=False):
     return certificate
 
 
+def is_client_cert(certificate):
+    """
+    Determine if this is a client certificate (ie, not a server certificate).
+
+    User client certs will have CLIENT_AUTH in the ExtendedKeyUsage field.
+
+    :param certificate: an instance of cryptography.x509.Certificate
+    :returns: True if this is a client certificate.
+    """
+    eku = certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage)
+    client_auth = x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH])
+    return eku.value == client_auth
+
+
+def write_pkcs12(crt_path, key_path, ca_crt_path, pkcs12_path, force):
+    """
+    Write out a private pkcs12 keypair with a password of "koji".
+
+    :param str crt_path: path to .crt file
+    :param str key_path: path to .key file
+    :param str ca_crt_path: path to CA .crt file
+    :param str pkcs12_path: path on disk to write the private p12 bundle file
+    """
+    if os.path.exists(pkcs12_path) and not force:
+        raise OSError(errno.EEXIST, os.strerror(errno.EEXIST), pkcs12_path)
+    # Unfortunately python-cryptography supports reading the pkcs12 format,
+    # but not writing it. We have to shell out to openssl, like:
+    # openssl pkcs12 -export -inkey kdreyer.key -in kdreyer.crt \
+    #                -CAfile koji-ca.crt -out kdreyer_browser_cert.p12
+    command = ('openssl', 'pkcs12', '-export',
+               '-in', crt_path, '-inkey', key_path,
+               '-CAfile', ca_crt_path, '-out', pkcs12_path,
+               '-passout', 'pass:koji')
+    subprocess.run(command)
+    # Sanity-check the new pkcs12 file exists and is valid.
+    with open(pkcs12_path, 'rb') as f:
+        if pkcs12:
+            backend = default_backend()
+            pkcs12.load_key_and_certificates(f.read(), 'koji', backend)
+
+
 def server_csr(args):
     force = args.force
     dnsnames = args.dnsnames
@@ -334,8 +384,22 @@ def sign(args):
     ca_crt_path = args.ca_cert
     csr_path = args.csr
     crt_path = csr_path.replace('.csr', '.crt')  # todo: re.replace() here
-    sign_with_ca(csr_path, ca_key_path, ca_crt_path, crt_path, force)
+    cert = sign_with_ca(csr_path, ca_key_path, ca_crt_path, crt_path, force)
     print('wrote %s - publish this for users' % crt_path)
+    # If this is a user cert, and we have a matching .key file in the same
+    # directory, then generate a pkcs12 bundle file with the cert and key.
+    key_path = csr_path.replace('.csr', '.key')  # todo: re.replace() here
+    if is_client_cert(cert) and os.path.exists(key_path):
+        bundle_user_browser_cert(crt_path, key_path, ca_crt_path, force)
+
+
+def bundle_user_browser_cert(crt_path, key_path, ca_crt_path, force):
+    pkcs12_path = key_path.replace('.key', '_browser_cert.p12')
+    # If this is a user cert, and we have a matching .key file in the same
+    # directory, then generate a pkcs12 bundle file with the cert and key.
+    write_pkcs12(crt_path, key_path, ca_crt_path, pkcs12_path, force)
+    print('wrote %s for kojiweb - protect this private file' % pkcs12_path)
+    print('to import %s into browser, the password is "koji"' % pkcs12_path)
 
 
 def parse_args():

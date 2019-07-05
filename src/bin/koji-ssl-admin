@@ -33,6 +33,9 @@ Common Koji SSL admin operations:
    You will pass this CSR (cert signing request) to a master CA for signing.
    You only need these if you use SSL cert authentication (not Kerberos).
    These might be usable with an external CA if you have one.
+   The Koji "user" accounts can be for humans (package developers) or for Koji
+   services (like kojid, kojiweb, or kojira) that authenticate to the Koji
+   Hub.
 
 3) Generate a new master CA.
    You only need this if you don't have an external CA in your environment
@@ -434,7 +437,8 @@ def parse_args():
                                  help='overwrite .key and .csr files if they'
                                       'exist')
     user_csr_parser.add_argument('username',
-                                 help='koji account name, eg. "kdreyer"')
+                                 help='koji account name, eg. "kdreyer" or'
+                                 ' "builder1.example.com"')
     user_csr_parser.set_defaults(func=user_csr)
 
     # new-ca sub-command:

@@ -344,7 +344,7 @@ def write_pkcs12(crt_path, key_path, ca_crt_path, pkcs12_path, force):
     with open(pkcs12_path, 'rb') as f:
         if pkcs12:
             backend = default_backend()
-            pkcs12.load_key_and_certificates(f.read(), 'koji', backend)
+            pkcs12.load_key_and_certificates(f.read(), b'koji', backend)
 
 
 def server_csr(args):

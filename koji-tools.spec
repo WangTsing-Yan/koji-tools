@@ -26,7 +26,6 @@ install -d $RPM_BUILD_ROOT%{_bindir}
 install -pm 0755 src/bin/* $RPM_BUILD_ROOT%{_bindir}
 
 %files
-%defattr(-,root,root,-)
 %{_bindir}/*
 %doc COPYING LGPL
 

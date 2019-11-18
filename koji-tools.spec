@@ -2,11 +2,9 @@ Name:       koji-tools
 Version:    1.3
 Release:    2%{?dist}
 Summary:    A collection of libraries and tools for interacting with Koji.
-Group:      Applications/System
 License:    LGPLv2 GPLv2+
 URL:        https://pagure.io/koji-tools
 Source0:    %{name}-%{version}.tar.gz
-BuildRoot:  %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
 BuildArch:  noarch
 
 BuildRequires:  python-devel
@@ -23,18 +21,13 @@ and automates koji tasks for the user.
 %build
 
 %install
-rm -rf $RPM_BUILD_ROOT
 install -d $RPM_BUILD_ROOT%{_bindir}
 install -pm 0755 src/bin/* $RPM_BUILD_ROOT%{_bindir}
 
-%clean
-rm -rf $RPM_BUILD_ROOT
-
-
 %files
-%defattr(-,root,root,-)
+%{!?_licensedir:%global license %doc}
+%license COPYING LGPL
 %{_bindir}/*
-%doc COPYING LGPL
 
 
 %changelog

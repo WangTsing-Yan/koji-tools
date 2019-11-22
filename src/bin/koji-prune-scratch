@@ -1,0 +1,21 @@
+#!/bin/bash
+# remove old scratch builds
+
+TOPDIR=/mnt/koji
+
+cd $TOPDIR/scratch/
+
+# we completely remove those that are old enough
+# scratch directories are /mnt/koji/scratch/$username/task_$taskid/
+# note that $username might contain a slash (e.g. host principals)
+find $TOPDIR/scratch/ -mindepth 2 -type d -name 'task_*' -prune -mtime +21 -exec rm -rf {} \;
+
+# For content besides srpms/logs/poms we prune much more aggressively
+# note that this step normally alters the mtime of the task dir, effectively
+# adding to the above retention window.
+for taskdir in $(find $TOPDIR/scratch/ -mindepth 2 -type d -name 'task_*' -prune -mtime +7)
+do
+    find "$taskdir" -type f \! -name '*.src.rpm' \! -name '*.log' \! -name '*.pom' -delete
+done
+
+find $TOPDIR/scratch/ -maxdepth 1 -type d -mtime +1 -empty -delete

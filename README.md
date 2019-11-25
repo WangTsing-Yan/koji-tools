@@ -36,6 +36,10 @@ Supplementary tools and utilities for the Koji build system
 * `koji-list-built-with` - List all the builds that had a given build in
   the buildroot.
 
+* `koji-prune-scratch` - Sample cronjob for cleaning scratch build data
+
+* `koji-prune-work` - Sample cronjob for cleaning work directories
+
 * `koji-remove-arch` - Globally remove an architecture from all tags in
   Koji.
 

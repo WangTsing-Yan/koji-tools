@@ -49,6 +49,8 @@ Supplementary tools and utilities for the Koji build system
 
 * `koji-rpmdiff` - Show differences between packages
 
+* `koji-search-containers` - Search container image builds for an RPM build.
+
 * `koji-show-tag-space` - Show the disk space statistics for builds in a
   tag
 

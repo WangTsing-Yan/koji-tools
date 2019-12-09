@@ -127,10 +127,12 @@ def parse_args():
                              ' /etc/koji.conf.d/*.conf.',
                         required=True)
     parser.add_argument('--nvr',
-                        help='RPM build NVR to search',
+                        help='RPM build NVR to search, eg '
+                        ' "ceph-14.2.4-3.fc32"',
                         required=True)
     parser.add_argument('--container',
-                        help='container package name to search',
+                        help='container package name to search, eg'
+                        ' "rhceph-container".',
                         required=True)
     args = parser.parse_args()
 

@@ -1,0 +1,163 @@
+#!/usr/bin/python3
+
+import argparse
+from argparse import RawTextHelpFormatter
+import koji
+from requests import Session
+import posixpath
+
+
+DESCRIPTION = """
+Search all OSBS container builds for a particular RPM build.
+"""
+
+
+def get_session(profile):
+    """
+    Return an anonymous koji session for this profile name.
+
+    :param str profile: profile name, like "koji" or "cbs"
+    :returns: anonymous koji.ClientSession
+    """
+    # Note: this raises koji.ConfigurationError if we could not find this
+    # profile name.
+    # (ie. "check /etc/koji.conf.d/*.conf")
+    conf = koji.read_config(profile)
+    conf['authtype'] = 'noauth'
+    hub = conf['server']
+    return koji.ClientSession(hub, {})
+
+
+def get_koji_pathinfo(profile):
+    """
+    Return a Koji PathInfo object for our profile.
+
+    :param str profile: profile name, like "koji" or "cbs"
+    :returns: koji.PathInfo
+    """
+    conf = koji.read_config(profile)
+    top = conf['topurl']  # or 'topdir' here for NFS access
+    pathinfo = koji.PathInfo(topdir=top)
+    return pathinfo
+
+
+def get_build_url(profile, build):
+    """
+    Return a Kojiweb URL for this build.
+
+    :param str profile: profile name, like "koji" or "cbs"
+    :param dict build: Koji build information
+    """
+    conf = koji.read_config(profile)
+    top = conf['weburl']
+    url = posixpath.join(top, 'buildinfo?buildID=%(build_id)d' % build)
+    return url
+
+
+def list_containers(session, name, date):
+    """
+    List the container builds of "name", reverse-ordered by completion time,
+    selecting only the ones that we built after the RPM build date.
+    """
+    # listBuilds requires pkg id, https://pagure.io/koji/issue/1209
+    package = session.getPackage(name)
+    package_id = package['id']
+    state = koji.BUILD_STATES['COMPLETE']
+    opts = {'order': '-completion_time',
+            'type': 'image'}
+    return session.listBuilds(package_id,
+                              state=state,
+                              completeAfter=date,
+                              queryOpts=opts)
+
+
+def get_metadata_url(profile, build):
+    """
+    Return the URL to the metadata.json for this build.
+
+    :param str profile: profile name, like "koji" or "cbs"
+    :param dict build: Koji build information
+    """
+    pathinfo = get_koji_pathinfo(profile)
+    builddir = pathinfo.build(build)
+    url = posixpath.join(builddir, 'metadata.json')
+    return url
+
+
+def get_metadata(profile, session, rsession, build):
+    """
+    Get the content-generator metadata for this Koji build.
+
+    :param str profile: profile name, like "koji" or "cbs"
+    :param session: koji.ClientSession
+    :param rsession: requests.Session
+    :param dict build: Koji build information
+    :returns: dict of entire content-generator metadata.
+    """
+    url = get_metadata_url(profile, build)
+    response = rsession.get(url)
+    return response.json()
+
+
+def contains_rpms(data, rpms):
+    """
+    Parse this OSBS container metadata for this RPM nvr.
+
+    :param dict data: Koji content-generator metadata.
+    :param list rpms: Koji rpms information
+    :returns: True if this build is in this metadata.
+    """
+    nvrs_to_find = [rpm['nvr'] for rpm in rpms]
+    output_items = data['output']  # logs, plus per-arch container images.
+    for output_item in output_items:
+        components = output_item.get('components', [])
+        for component in components:
+            if component['type'] != 'rpm':
+                continue
+            nvr = '%(name)s-%(version)s-%(release)s' % component
+            if nvr in nvrs_to_find:
+                return True
+    return False
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description=DESCRIPTION,
+                                     formatter_class=RawTextHelpFormatter)
+    parser.add_argument('--profile', help='Koji profile')
+    parser.add_argument('--nvr', help='RPM build NVR to search')
+    parser.add_argument('--container', help='container package name to search')
+    args = parser.parse_args()
+
+    if not args.container.endswith('-container'):
+        raise ValueError('%s must end with "-container"' % args.container)
+
+    return args
+
+
+def main():
+    args = parse_args()
+    session = get_session(args.profile)
+    build = session.getBuild(args.nvr)
+    if not build:
+        raise ValueError('"%s" is not a koji build' % args.nvr)
+    build_date = build['completion_ts']
+    rpms = session.listRPMs(build['id'])
+    containers = list_containers(session, args.container, build_date)
+    print('Found %d containers built after %s' % (len(containers), args.nvr))
+
+    rsession = Session()
+    results = []
+    for container in containers:
+        metadata = get_metadata(args.profile, session, rsession, container)
+        if contains_rpms(metadata, rpms):
+            results.append(container)
+
+    print('Found %d containers that contain %s:' % (len(results), args.nvr))
+    for result in results:
+        nvr = '%(name)s-%(version)s-%(release)s' % result
+        url = get_build_url(args.profile, result)
+        print(' %s - %s' % (nvr, url))
+
+
+if __name__ == '__main__':
+    main()

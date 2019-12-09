@@ -53,6 +53,13 @@ def get_build_url(profile, build):
     return url
 
 
+def get_package_url(profile, package):
+    conf = koji.read_config(profile)
+    top = conf['weburl']
+    url = posixpath.join(top, 'packageinfo?packageID=%(id)d' % package)
+    return url
+
+
 def list_containers(session, name, date):
     """
     List the container builds of "name", reverse-ordered by completion time,
@@ -142,12 +149,30 @@ def parse_args():
     return args
 
 
+def help_missing_nvr(profile, session, nvr):
+    """
+    A user has specified a build NVR that does not exist. Link to the package
+    in kojiweb.
+    """
+    print('"%s" is not a Koji build' % nvr)
+    build = koji.parse_NVR(nvr)
+    name = build['name']
+    package = session.getPackage(name)
+    if not package:
+        print('There is no "%s" package in Koji.' % name)
+        return
+    print('Please choose a valid %s build:' % name)
+    url = get_package_url(profile, package)
+    print(url)
+
+
 def main():
     args = parse_args()
     session = get_session(args.profile)
     build = session.getBuild(args.nvr)
     if not build:
-        raise ValueError('"%s" is not a koji build' % args.nvr)
+        help_missing_nvr(args.profile, session, args.nvr)
+        raise SystemExit(1)
     build_date = build['completion_ts']
     rpms = session.listRPMs(build['id'])
     containers = list_containers(session, args.container, build_date)

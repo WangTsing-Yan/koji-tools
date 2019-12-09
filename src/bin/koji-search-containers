@@ -122,7 +122,9 @@ def contains_rpms(data, rpms):
 def parse_args():
     parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--profile',
-                        help='Koji profile',
+                        help='Koji profile. Your Koji client profile'
+                             ' definitions are stored in'
+                             ' /etc/koji.conf.d/*.conf.',
                         required=True)
     parser.add_argument('--nvr',
                         help='RPM build NVR to search',

@@ -123,9 +123,15 @@ def contains_rpms(data, rpms):
 def parse_args():
     parser = argparse.ArgumentParser(description=DESCRIPTION,
                                      formatter_class=RawTextHelpFormatter)
-    parser.add_argument('--profile', help='Koji profile')
-    parser.add_argument('--nvr', help='RPM build NVR to search')
-    parser.add_argument('--container', help='container package name to search')
+    parser.add_argument('--profile',
+                        help='Koji profile',
+                        required=True)
+    parser.add_argument('--nvr',
+                        help='RPM build NVR to search',
+                        required=True)
+    parser.add_argument('--container',
+                        help='container package name to search',
+                        required=True)
     args = parser.parse_args()
 
     if not args.container.endswith('-container'):

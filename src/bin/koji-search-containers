@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 
 import argparse
-from argparse import RawTextHelpFormatter
 import koji
 from requests import Session
 import posixpath
@@ -121,16 +120,19 @@ def contains_rpms(data, rpms):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description=DESCRIPTION,
-                                     formatter_class=RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument('--profile',
-                        help='Koji profile',
+                        help='Koji profile. Your Koji client profile'
+                             ' definitions are stored in'
+                             ' /etc/koji.conf.d/*.conf.',
                         required=True)
     parser.add_argument('--nvr',
-                        help='RPM build NVR to search',
+                        help='RPM build NVR to search, eg '
+                        ' "ceph-14.2.4-3.fc32"',
                         required=True)
     parser.add_argument('--container',
-                        help='container package name to search',
+                        help='container package name to search, eg'
+                        ' "rhceph-container".',
                         required=True)
     args = parser.parse_args()
 

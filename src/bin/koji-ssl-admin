@@ -4,6 +4,7 @@ from argparse import RawTextHelpFormatter
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import errno
+import fileinput
 import os
 import subprocess
 from cryptography.hazmat.backends import default_backend
@@ -394,6 +395,9 @@ def sign(args):
     key_path = csr_path.replace('.csr', '.key')  # todo: re.replace() here
     if is_client_cert(cert) and os.path.exists(key_path):
         bundle_user_browser_cert(crt_path, key_path, ca_crt_path, force)
+    # If this is a server cert, create the SSL cert chain file
+    if not is_client_cert(cert):
+        build_cert_chain_file(crt_path, ca_crt_path, force)
 
 
 def bundle_user_browser_cert(crt_path, key_path, ca_crt_path, force):
@@ -403,6 +407,26 @@ def bundle_user_browser_cert(crt_path, key_path, ca_crt_path, force):
     write_pkcs12(crt_path, key_path, ca_crt_path, pkcs12_path, force)
     print('wrote %s for kojiweb - protect this private file' % pkcs12_path)
     print('to import %s into browser, the password is "koji"' % pkcs12_path)
+
+
+def build_cert_chain_file(crt_path, ca_cert_path, force):
+    """
+    Concatenate the certificate and CA into a single "chain" file suitable for
+    loading into Apache's mod_ssl (SSLCertificateChainFile directive).
+
+    :param str crt_path: path to the server public certificate
+    :param str ca_crt_path: path to the CA public certificate
+    :param bool force: overwrite the chain file if it already exists
+    """
+    chain_path = crt_path.replace('.crt', '.chain.crt')  # todo: re.replace()
+    if os.path.exists(chain_path) and not force:
+        raise OSError(errno.EEXIST, os.strerror(errno.EEXIST), chain_path)
+    with open(chain_path, 'w') as fout:
+        fin = fileinput.input([crt_path, ca_cert_path])
+        for line in fin:
+            fout.write(line)
+        fin.close()
+    print('wrote %s - use this in the HTTP server config' % chain_path)
 
 
 def parse_args():

@@ -6,6 +6,7 @@ from dateutil.relativedelta import relativedelta
 import errno
 import fileinput
 import os
+import re
 import subprocess
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
@@ -387,12 +388,12 @@ def sign(args):
     ca_key_path = args.ca_key
     ca_crt_path = args.ca_cert
     csr_path = args.csr
-    crt_path = csr_path.replace('.csr', '.crt')  # todo: re.replace() here
+    crt_path = re.sub(r'\.csr$', '.crt', csr_path)
     cert = sign_with_ca(csr_path, ca_key_path, ca_crt_path, crt_path, force)
     print('wrote %s - publish this for users' % crt_path)
     # If this is a user cert, and we have a matching .key file in the same
     # directory, then generate a pkcs12 bundle file with the cert and key.
-    key_path = csr_path.replace('.csr', '.key')  # todo: re.replace() here
+    key_path = re.sub(r'\.csr$', '.key', csr_path)
     if is_client_cert(cert) and os.path.exists(key_path):
         bundle_user_browser_cert(crt_path, key_path, ca_crt_path, force)
     # If this is a server cert, create the SSL cert chain file
@@ -418,7 +419,7 @@ def build_cert_chain_file(crt_path, ca_cert_path, force):
     :param str ca_crt_path: path to the CA public certificate
     :param bool force: overwrite the chain file if it already exists
     """
-    chain_path = crt_path.replace('.crt', '.chain.crt')  # todo: re.replace()
+    chain_path = re.sub(r'\.crt$', '.chain.crt', crt_path)
     if os.path.exists(chain_path) and not force:
         raise OSError(errno.EEXIST, os.strerror(errno.EEXIST), chain_path)
     with open(chain_path, 'w') as fout:

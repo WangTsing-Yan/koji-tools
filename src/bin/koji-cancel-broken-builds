@@ -1,0 +1,77 @@
+#!/usr/bin/python
+
+"""
+Sometimes builds can be left in BUILDING state, while its task is already
+FAILED or CANCELED. In such situation nvr will never be free for next builds.
+Run this script to find such open builds without corresponding active tasks
+and cancel them.
+
+https://pagure.io/koji/issue/972
+"""
+
+import optparse
+import os
+import time
+
+import koji
+
+from koji_cli.lib import activate_session
+
+
+def main():
+    global koji
+    parser = optparse.OptionParser(usage='%prog [options]')
+    parser.add_option('-p', '--profile', default='koji', help='pick a profile')
+    parser.add_option('-t', '--test', action='store_true', default=False,
+                      help='test mode')
+    parser.add_option('-v', '--verbose', action="store_true", default=False)
+    parser.add_option('-d', '--delay', action='store', default=30,
+                      help="wait %default seconds before checking for task")
+    opts, args = parser.parse_args()
+
+    try:
+        opts.delay = int(opts.delay)
+    except ValueError:
+        parser.error("-d must be an integer")
+
+    koji = koji.get_profile_module(opts.profile)
+
+    for name in ('cert', 'serverca'):
+        value = os.path.expanduser(getattr(koji.config, name))
+        setattr(koji.config, name, value)
+
+    session_opts = koji.grab_session_options(koji.config)
+    session = koji.ClientSession(koji.config.server, session_opts)
+    if not opts.test:
+        activate_session(session, koji.config)
+
+    running_builds = session.listBuilds(state=koji.BUILD_STATES['BUILDING'])
+    # skip builds without tasks (imports)
+    running_builds = [b for b in running_builds if b['task_id']]
+    if not running_builds:
+        if opts.verbose:
+            print("No running builds")
+        return
+
+    # sleep
+    if opts.verbose:
+        print("Waiting for %d seconds (%d running builds)" % (opts.delay, len(running_builds)))
+    time.sleep(opts.delay)
+
+    session.multicall = True
+    for build in running_builds:
+        session.getTaskInfo(build['task_id'])
+    for build, [task] in zip(running_builds, session.multiCall()):
+        if task['state'] in (koji.TASK_STATES['CANCELED'], koji.TASK_STATES['FAILED']):
+            if opts.test:
+                print("Would cancel build %s (%s), task %s is in state %s" %
+                      (build['nvr'], build['build_id'], task['task_id'],
+                          koji.TASK_STATES[task['state']]))
+            else:
+                print("Cancelling build %s (%s), task %s is in state %s" %
+                      (build['nvr'], build['build_id'], task['task_id'],
+                          koji.TASK_STATES[task['state']]))
+                session.cancelBuild(build['build_id'])
+
+if __name__ == "__main__":
+    main()

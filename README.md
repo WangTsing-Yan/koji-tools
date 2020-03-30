@@ -63,3 +63,30 @@ Supplementary tools and utilities for the Koji build system
 * `koji-dump-hosts` - Write current host data to a file
 
 * `koji-restore-hosts` - Restore host data from a file
+
+# Development
+
+`koji-tools` is low-barrier repository of various scripts related to usage and
+administration scripts related to [koji](https://pagure.io/koji/). Feel free to
+submit any script, which can be useful for others. Mature scripts can be also
+promoted to koji itself either as plugins or as part of the base koji.
+
+Pull requests submitted to this repository will generally go through review of
+one of the koji core developers and will be merged, if there is no significant
+issue with them. They should follow Koji's programming
+[guidelines](https://docs.pagure.org/koji/writing_koji_code/), but it is not
+strictly required.
+
+Scripts which should move to base koji are under harder scrutiny. They should be
+ready to land there, contain basic tests, etc. Filing an [issue in
+koji](https://pagure.io/koji/new_issue) is good place to start. We can help you
+to get that code in the shape, when it will be in pull request.
+
+Thanks for contributions!
+
+# Releases
+
+There are no official releases made from this repo. Users usually pull it via
+git and use directly. We're not planning to make official releases of this repo
+in near future.
+

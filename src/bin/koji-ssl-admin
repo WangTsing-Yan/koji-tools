@@ -402,6 +402,11 @@ def sign(args):
 
 
 def bundle_user_browser_cert(crt_path, key_path, ca_crt_path, force):
+    """
+    Combine a user's public .crt file and matching .key file into one file.
+
+    Use the .pkcs12 bundle file to log into Kojiweb.
+    """
     pkcs12_path = re.sub(r'\.key$', '_browser_cert.p12', key_path)
     write_pkcs12(crt_path, key_path, ca_crt_path, pkcs12_path, force)
     print('wrote %s for kojiweb - protect this private file' % pkcs12_path)

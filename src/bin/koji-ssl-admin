@@ -402,7 +402,7 @@ def sign(args):
 
 
 def bundle_user_browser_cert(crt_path, key_path, ca_crt_path, force):
-    pkcs12_path = key_path.replace('.key', '_browser_cert.p12')
+    pkcs12_path = re.sub(r'\.key$', '_browser_cert.p12', key_path)
     # If this is a user cert, and we have a matching .key file in the same
     # directory, then generate a pkcs12 bundle file with the cert and key.
     write_pkcs12(crt_path, key_path, ca_crt_path, pkcs12_path, force)

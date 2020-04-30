@@ -66,6 +66,8 @@ Supplementary tools and utilities for the Koji build system
 
 * `koji-restore-hosts` - Restore host data from a file
 
+* `koji-multitag` - Perform multiple tag actions on multiple builds
+
 # Development
 
 `koji-tools` is low-barrier repository of various scripts related to usage and

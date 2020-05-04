@@ -1,0 +1,65 @@
+#!/usr/bin/python3
+
+import click
+import koji
+import koji_cli.lib
+
+
+@click.command()
+@click.option(
+    '-p', '--profile', default='koji',
+    help='set the koji profile'
+)
+@click.option(
+    '-u', '--untag', 'untags', multiple=True,
+    help='tag to remove (can be used multiple times)'
+)
+@click.option(
+    '-t', '--tag', 'tags', multiple=True,
+    help='tag to add (can be used multiple times)'
+)
+@click.option(
+    '-r', '--retag', 'retags', multiple=True,
+    help='tag to remove and re-add (can be used multiple times)'
+)
+@click.argument('builds', required=True, nargs=-1)
+def main(profile, untags, tags, retags, builds):
+    """
+    Perform multiple tag actions on multiple builds.
+    """
+
+    # Set up koji session.
+    profile_module = koji.get_profile_module(profile)
+    session = profile_module.ClientSession(profile_module.config.server)
+    try:
+        koji_cli.lib.activate_session(session, profile_module.config)
+    except KeyboardInterrupt:
+        raise click.ClickException('aborting koji session activation')
+    except profile_module.ServerOffline:
+        raise click.ClickException('failed to activate koji session')
+
+    # Validate builds exist.
+    session.multicall = True
+    for build in builds:
+        session.findBuildID(build)
+    for build, [build_id] in zip(builds, session.multiCall(strict=True)):
+        if not build_id:
+            click.ClickException(f'no build found matching {build}')
+
+    # Untag, tag, and retag builds.
+    session.multicall = True
+    for untag in untags:
+        for build in builds:
+            session.untagBuild(untag, build)
+    for tag in tags:
+        for build in builds:
+            session.tagBuild(tag, build)
+    for retag in retags:
+        for build in builds:
+            session.untagBuild(retag, build)
+            session.tagBuild(retag, build)
+    session.multiCall(strict=True)
+
+
+if __name__ == '__main__':
+    main()

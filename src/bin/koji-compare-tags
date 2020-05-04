@@ -27,7 +27,7 @@ class CompareTags(object):
         """
 
         if not self.quiet:
-            print "Diff between tags: %s and %s" % (tags[0], tags[1])
+            print("Diff between tags: %s and %s" % (tags[0], tags[1]))
 
         builds_by_tag = {}
         for tag in tags:
@@ -51,7 +51,7 @@ class CompareTags(object):
                 prefix = " "
 
             if not (just_diff and prefix == " "):
-                print "%s %s" % (prefix, i)
+                print("%s %s" % (prefix, i))
 
 
 def main(argv):

@@ -1,41 +1,65 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
-import commands
-import sys
-from optparse import OptionParser
+import copy
 
-
-def run(command):
-    print command
-    rv, output = commands.getstatusoutput(command)
-    if rv:
-        raise RuntimeError("Error when running: '%s': %s" % (command, output))
-    return output
+import click
+import koji
+import koji_cli.lib
 
 
-def main(args):
-    '''the main method'''
+@click.command()
+@click.option('-p', '--profile', default='koji', help='set the koji profile')
+@click.option('-P', '--priority', type=int, help='override priority')
+@click.argument('tag')
+@click.argument('old-parent')
+@click.argument('new-parent')
+def main(profile, priority, tag, old_parent, new_parent):
+    """
+    Replace one parent tag with another parent tag.
+    """
 
-    parser = OptionParser("usage: %prog [options] <tag> <tag to be replaced> <replacement tag>")
-    parser.add_option('-r', '--profile', default='koji',
-                      help='set the koji profile')
-    (opts, args) = parser.parse_args(args)
+    # Set up koji session.
+    profile_module = koji.get_profile_module(profile)
+    session = profile_module.ClientSession(profile_module.config.server)
+    try:
+        koji_cli.lib.activate_session(session, profile_module.config)
+    except KeyboardInterrupt:
+        raise click.ClickException('aborting koji session activation')
+    except profile_module.ServerOffline:
+        raise click.ClickException('failed to activate koji session')
 
-    if len(args) != 4:
-        parser.error("incorrect number of arguments")
+    # Get new parent tag ID.
+    new_parent_id = session.getTagID(new_parent)
 
-    output = run("%s taginfo %s" % (opts.profile, args[1]))
-    priority = None
-    for line in output.splitlines():
-        parts = line.split()
-        if len(parts) == 4 and parts[2] == args[2]:
-            priority = int(parts[0])
+    # Get previous inheritance rules.
+    rules = session.getInheritanceData(tag)
+
+    # Find the old parent tag's rule.
+    for rule in rules:
+        if rule['name'] == old_parent:
+            old_rule = copy.copy(rule)
+            new_rule = copy.copy(rule)
             break
-    if priority is None:
-        raise RuntimeError("Cannot find inheritance priority for tag '%s'. "
-                "Is the tag inherited?" % args[2])
-    run("%s remove-tag-inheritance %s %s" % (opts.profile, args[1], args[2]))
-    run("%s add-tag-inheritance --priority %s %s %s" % (opts.profile, priority, args[1], args[3]))
+    else:
+        raise click.BadParameter(f'{old_parent} not found in the inheritance of {tag}')
 
-if __name__ == "__main__":
-    main(sys.argv)
+    # Start multicall.
+    session.multicall = True
+
+    # Remove old parent.
+    old_rule['delete link'] = True
+    session.setInheritanceData(tag, old_rule)
+
+    # Add new parent.
+    new_rule['name'] = new_parent
+    new_rule['parent_id'] = new_parent_id
+    if priority is not None:
+        new_rule['priority'] = priority
+    session.setInheritanceData(tag, new_rule)
+
+    # Finish multicall.
+    session.multiCall(strict=True)
+
+
+if __name__ == '__main__':
+    main()

@@ -3,6 +3,7 @@
 import Queue   # for exceptions
 import cProfile
 from functools import partial
+import hashlib
 import logging
 import multiprocessing
 import optparse
@@ -13,8 +14,6 @@ import time
 
 import dateutil
 import koji as _koji  # koji declared using profile module in main()
-from koji.util import md5_constructor
-from koji.util import sha1_constructor
 import rpm
 
 
@@ -576,7 +575,7 @@ class BuildChecker(object):
                     logger.warn("Cached signature missing: %s", cachefile)
                     self.fail('sigcache.missing')
                     continue
-                sighash = md5_constructor(file(cachefile).read()).hexdigest()
+                sighash = hashlib.md5(file(cachefile).read()).hexdigest()
                 if sighash != sig['sighash']:
                     logger.warn('Cached signature mismatch for %s\n'
                             '  db: %s, file:%s',
@@ -598,7 +597,7 @@ class BuildChecker(object):
                 stats.increment('sigheader.checked')
                 start = time.time()
                 hdr = koji.rip_rpm_sighdr(signed)
-                sighash = md5_constructor(hdr).hexdigest()
+                sighash = hashlib.md5(hdr).hexdigest()
                 elapsed = time.time() - start
                 stats.increment('sigheader.bytes', len(hdr))
                 stats.increment('sigheader.time', elapsed)
@@ -680,9 +679,9 @@ class BuildChecker(object):
             logger.error('Unknown sum type %s for %s', sumtype, fn)
             return
         if sumtype == 'md5':
-            chk = md5_constructor()
+            chk = hashlib.md5()
         elif sumtype == 'sha1':
-            chk = sha1_constructor()
+            chk = hashlib.sha1()
         else:
             logger.error('Unsupported sum type %s for %s', sumtype, fn)
             return

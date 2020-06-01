@@ -442,7 +442,7 @@ def parse_args():
 
     # server-csr sub-command:
     server_csr_help = ('Generate a new server key and CSR for an HTTPS server'
-                       '(eg. kojihub or kojiweb).')
+                       '\n(eg. kojihub or kojiweb).')
     server_csr_parser = subparsers.add_parser('server-csr',
                                               help=server_csr_help)
     server_csr_parser.add_argument('--force', action='store_true',

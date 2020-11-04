@@ -2,6 +2,7 @@ import queue
 import logging
 import threading
 from enum import Enum
+from functools import reduce
 
 import six
 
@@ -60,7 +61,6 @@ def handle_replicate_tasks(options, session, args):
 
 
 def get_tasks(session, parser, opts):
-    tasks = []
     channels = opts.channels
     hosts = opts.hosts
     methods = opts.methods
@@ -98,37 +98,37 @@ def get_tasks(session, parser, opts):
     if offset:
         queryOpts['offset'] = offset
     queryOpts['order'] = '-id'
-    session.multicall = True
-    if channel_ids:
-        for channel_id in channel_ids:
-            if methods:
-                for method in methods:
-                    session.listTasks(dict(options, method=method,
-                                           channel_id=channel_id),
-                                      queryOpts)
-            else:
-                session.listTasks(dict(options, channel_id=channel_id),
-                                  queryOpts)
-
-    elif host_ids:
-        for host_id in host_ids:
-            if methods:
-                for method in methods:
-                    session.listTasks(dict(options, method=method,
-                                           host_id=host_id),
-                                      queryOpts)
-            else:
-                session.listTasks(dict(options, host_id=host_id),
-                                  queryOpts)
-    else:
-        if methods:
-            for method in methods:
-                session.listTasks(dict(options, method=method), queryOpts)
+    cvs = []
+    with session.multicall() as m:
+        if channel_ids:
+            for channel_id in channel_ids:
+                if methods:
+                    for method in methods:
+                        cvs.append((m.listTasks(dict(options, method=method,
+                                                     channel_id=channel_id),
+                                                queryOpts)))
+                else:
+                    cvs.append(m.listTasks(dict(options, channel_id=channel_id), queryOpts))
+        elif host_ids:
+            for host_id in host_ids:
+                if methods:
+                    for method in methods:
+                        cvs.append(m.listTasks(dict(options, method=method, host_id=host_id),
+                                               queryOpts))
+                else:
+                    cvs.append(m.listTasks(dict(options, host_id=host_id), queryOpts))
         else:
-            session.listTasks(options, queryOpts)
-    tasks = sum(sum(session.multiCall(), []), tasks)
+            if methods:
+                for method in methods:
+                    cvs.append(m.listTasks(dict(options, method=method), queryOpts))
+            else:
+                cvs.append(m.listTasks(options, queryOpts))
+    tasks = sum([cv.result for cv in cvs], [])
+    print(tasks)
     if not tasks:
         raise koji.GenericError("no tasks to replicate.")
+    else:
+        logger.debug("to replicate tasks:\n%s", "\n".join([str(t['id']) for t in tasks]))
     return tasks
 
 

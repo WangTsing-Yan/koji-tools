@@ -156,10 +156,10 @@ def parse_options(options, args):
                       help=_("specify hosts where tasks are replicated from"))
     parser.add_option("-m", "--method", dest="methods", action="append",
                       default=[],
-                      help=_("specify methods that original tasks are"))
+                      help=_("specify methods that original tasks are. Only supports 'build' now"))
     parser.add_option("-S", "--state", dest="states", action="append",
                       default=['CLOSED'],
-                      help=_("specify states of tasks which are replicated"))
+                      help=_("specify states of tasks which are replicated, [Default: %default]"))
     parser.add_option("-w", "--weight", type='int', help=_("set task weight"))
     parser.add_option("--channel-override",
                       help=_("use a non-standard channel to replicate tasks"))
@@ -171,9 +171,9 @@ def parse_options(options, args):
     # parser.add_option("--limit-by", default='channel',
     #                   help=_("specify field used by --limit"))
     parser.add_option("--limit", type='int', default=3,
-                      help=_("max task count per channel/host"))
+                      help=_("limit per method and/or per channel/host, [Default: %default]"))
     parser.add_option("--offset", type="int", default=0,
-                      help=_("offset of limit"))
+                      help=_("offset of limit, [Default: %default]"))
     parser.add_option("--quiet", action="store_true", default=options.quiet,
                       help=_("Do not print the task information"))
 
